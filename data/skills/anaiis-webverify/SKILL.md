@@ -71,7 +71,7 @@ Build the artifact. Tool choice by stack:
 **Gate**: all three must pass:
 ```bash
 test -f index.html
-test $(stat -f%z index.html) -gt 1000
+test $(wc -c < index.html) -gt 1000
 echo "size ok"
 ```
 
