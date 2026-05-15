@@ -38,8 +38,9 @@ Do NOT activate when:
 
 Before querying, verify the catalog exists using Glob:
 
-- Check `references_catalog.parquet` in `~/Documents/icloud-docs/prof-edu/references/`
-- If not found, check `references_catalog.parquet` in the current working directory
+- Check `references_catalog.parquet` in the current working directory (project-specific catalog)
+- If not found, check `references_catalog.parquet` in `~/Documents/icloud-docs/prof-edu/references/` (user's main library)
+- If both exist, use the current directory version; note: "Using local catalog; main library also available at ~/Documents/icloud-docs/prof-edu/references/"
 
 - **Catalog exists**: proceed with the workflow below
 - **Catalog missing**: stop and inform the user. Do not attempt to read PDFs directly at scale.
@@ -95,7 +96,7 @@ Grep(pattern=<keyword>, path=<subdirectory path>, glob="*.txt", output_mode="fil
 
 This verifies a specific method, finding, or term appears in the paper body, not just the abstract.
 
-Check with Glob before grepping, skip this step if `.txt` files do not exist alongside the PDFs.
+Check with Glob before grepping. If `.txt` files do not exist alongside the PDFs, skip this step, proceed to Step 4, and note to the user: "Full-text keyword search skipped -- no .txt extracts found. Candidate narrowing is based on abstracts only (lower confidence)."
 
 Never use `Bash(rg)` or `Bash(grep)` for this step.
 
@@ -154,7 +155,7 @@ Per `rules/citations.md`: web results are supplementary. Present them separately
 | ... | ... | ... | https://doi.org/... | Relevance note |
 ```
 
-**File output:** Write the completed synthesis to `litreview-<topic-slug>-<YYYY-MM-DD>.md` in the current working directory. Print only the file path to terminal, not the full synthesis.
+**File output:** Write the completed synthesis to `litreview-<topic-slug>-<YYYY-MM-DD>.md` in the current working directory. `<topic-slug>`: lowercase the user's query, replace spaces and non-alphanumeric characters with hyphens, collapse runs of hyphens, truncate to 40 characters, trim trailing hyphens (e.g., "burnout" from "What does the literature say about burnout?"; fallback to "topic" if empty). Print only the file path to terminal, not the full synthesis.
 
 ## Hard limits
 
