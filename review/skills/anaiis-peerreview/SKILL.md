@@ -16,7 +16,7 @@ Simulate the feedback a seasoned journal reviewer would give on a manuscript so 
 
 | Format | Tool | Notes |
 |---|---|---|
-| `.pdf` | Read tool with `pages` parameter | Read in <=15-page chunks |
+| `.pdf` | Read tool with `pages` parameter | Read in <=20-page chunks |
 | `.md` / `.txt` / `.tex` | Read tool directly | Use `offset`/`limit` for files over 200 lines |
 | `.docx` | detect: `textutil` (macOS) or `soffice` (Linux) | See detection rules in `references/workflow.md` |
 
