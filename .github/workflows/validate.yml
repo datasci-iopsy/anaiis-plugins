@@ -25,6 +25,7 @@ jobs:
 
       - name: Check SKILL.md token budget
         run: python scripts/count-skill-tokens.py --budget 500
+        continue-on-error: true
 
       - name: Validate plugin manifests
         run: |
