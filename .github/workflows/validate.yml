@@ -1,0 +1,55 @@
+name: Validate skills
+
+on:
+  pull_request:
+    paths:
+      - "*/skills/**"
+      - "*/.claude-plugin/plugin.json"
+      - ".claude-plugin/marketplace.json"
+  push:
+    branches:
+      - main
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Lint SKILL.md frontmatter
+        run: python scripts/lint-skills.py
+
+      - name: Check SKILL.md token budget
+        run: python scripts/count-skill-tokens.py --budget 500
+
+      - name: Validate plugin manifests
+        run: |
+          python - <<'EOF'
+          import json
+          from pathlib import Path
+
+          repo = Path(".")
+          errors = []
+
+          # Validate marketplace.json
+          mkt = repo / ".claude-plugin" / "marketplace.json"
+          if not mkt.exists():
+              errors.append("missing .claude-plugin/marketplace.json")
+          else:
+              data = json.loads(mkt.read_text())
+              for plugin in data.get("plugins", []):
+                  path = repo / plugin["path"] / ".claude-plugin" / "plugin.json"
+                  if not path.exists():
+                      errors.append(f"plugin path missing: {path}")
+
+          if errors:
+              for e in errors:
+                  print(f"FAIL: {e}")
+              raise SystemExit(1)
+          else:
+              print("All plugin manifests valid.")
+          EOF
