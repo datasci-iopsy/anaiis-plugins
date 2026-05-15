@@ -2,5 +2,22 @@
     "name": "anaiis-data",
     "version": "0.1.0",
     "description": "DuckDB queries, dashboards, web verification, and graph analysis",
-    "skills": []
+    "skills": [
+        {
+            "name": "anaiis-duckdb",
+            "path": "skills/anaiis-duckdb/SKILL.md"
+        },
+        {
+            "name": "anaiis-dashboard",
+            "path": "skills/anaiis-dashboard/SKILL.md"
+        },
+        {
+            "name": "anaiis-webverify",
+            "path": "skills/anaiis-webverify/SKILL.md"
+        },
+        {
+            "name": "graphify",
+            "path": "skills/graphify/SKILL.md"
+        }
+    ]
 }

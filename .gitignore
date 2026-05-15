@@ -16,6 +16,9 @@ eggs/
 .eggs/
 lib/
 lib64/
+# Allow lib/ inside skill directories (shell scripts, not compiled artifacts)
+!*/skills/*/lib/
+!*/skills/*/lib/**
 parts/
 sdist/
 var/

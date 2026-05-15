@@ -2,5 +2,22 @@
     "name": "anaiis-git",
     "version": "0.1.0",
     "description": "Git, PR, changelog, and preflight workflows",
-    "skills": []
+    "skills": [
+        {
+            "name": "anaiis-gitpr",
+            "path": "skills/anaiis-gitpr/SKILL.md"
+        },
+        {
+            "name": "anaiis-gitrebase",
+            "path": "skills/anaiis-gitrebase/SKILL.md"
+        },
+        {
+            "name": "anaiis-changelog",
+            "path": "skills/anaiis-changelog/SKILL.md"
+        },
+        {
+            "name": "anaiis-preflight",
+            "path": "skills/anaiis-preflight/SKILL.md"
+        }
+    ]
 }

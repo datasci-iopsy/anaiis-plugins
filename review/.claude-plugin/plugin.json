@@ -2,5 +2,22 @@
     "name": "anaiis-review",
     "version": "0.1.0",
     "description": "Code, manuscript, and skill review workflows",
-    "skills": []
+    "skills": [
+        {
+            "name": "anaiis-coderabbit",
+            "path": "skills/anaiis-coderabbit/SKILL.md"
+        },
+        {
+            "name": "anaiis-peerreview",
+            "path": "skills/anaiis-peerreview/SKILL.md"
+        },
+        {
+            "name": "anaiis-skillreview",
+            "path": "skills/anaiis-skillreview/SKILL.md"
+        },
+        {
+            "name": "anaiis-docaudit",
+            "path": "skills/anaiis-docaudit/SKILL.md"
+        }
+    ]
 }
