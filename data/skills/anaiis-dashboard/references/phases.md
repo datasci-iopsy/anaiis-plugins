@@ -119,7 +119,7 @@ uv run python ~/.dotfiles/templates/dashboard/inline_charts.py \
 ```bash
 grep -c 'data-fig=' index.html && echo "FAIL: external fig refs remain" || echo "OK: no external refs"
 for id in $(jq -r '.charts[].id' dashboard.config.json); do
-    grep -q "id=\"fig-${id}\"" index.html && echo "OK: fig-${id} inlined" || echo "FAIL: fig-${id} missing"
+    grep -q "id=\"chart-${id}\"" index.html && echo "OK: chart-${id} inlined" || echo "FAIL: chart-${id} missing"
 done
 ```
 
