@@ -8,7 +8,7 @@ version: 0.1.0
 
 # Agent Orchestration
 
-Decompose tasks into parallel subagents when independent subtasks exist. Parallel spawning is the default when Step 1 reveals independent subtasks. Do not ask, do not wait for explicit instruction.
+Decompose tasks into parallel subagents when independent subtasks exist. Parallel spawning is the default when Step 1 reveals independent subtasks. Do not ask, do not wait for explicit instruction -- except for expensive exploratory operations (see "During planning" below), where you should prompt the user for a targeted scope before spawning.
 
 ## When to activate
 
@@ -20,7 +20,7 @@ Activate when the task matches ANY of these patterns:
 | Multi-file analysis with unrelated sources | "Summarize findings across these 4 reports" |
 | Multi-source research with independent angles | "What does the literature say from clinical, statistical, and policy perspectives?" |
 | Exploratory pattern search across 3+ unrelated modules | "How do auth, billing, and notifications handle errors?" -- Explore agents |
-| Code review of 3+ independent files | "Review auth.py, billing.py, and notifications.py" -- code-reviewer agents, one file per agent |
+| Code review of 3+ independent files | "Review auth.py, billing.py, and notifications.py" -- code-reviewer agents, one file per agent (1-2 files: single agent or inline, no parallel spawn needed) |
 | Independent setup tasks | "Configure linting, testing, and CI" |
 | Explicit parallelism request | "Run these in parallel", "use agents for this" |
 
@@ -99,7 +99,7 @@ After all agents return:
 - **Prefer subagents over agent teams.** Subagents return summarized results; agent teams maintain full per-agent context with coordination overhead (~7x token cost). Only use agent teams when teammates must communicate mid-task.
 - **Cap at 5 parallel agents** per user request.
 - **Skip parallelism for short tasks.** If the work would take under 4 sequential tool calls, the token overhead of spawning agents exceeds the benefit.
-- **Cap agent depth at 10 tool calls per agent.** If a subtask needs more, it is too broad -- split it or run it inline. For code review, one file = one agent = bounded depth.
+- **Cap agent depth at 10 tool calls per agent.** If a subtask needs more, it is too broad -- split it or run it inline. For code review, one file = one agent, and the 10-call cap is expected to be sufficient; if a single file requires more than 10 tool calls, review it inline instead.
 - **Model down where possible.** Haiku at ~$0.25/MTok vs Sonnet at ~$3/MTok. A gather-and-report agent should never run on Sonnet.
 
 ## Planning vs implementation token profiles
