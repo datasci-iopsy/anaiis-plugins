@@ -1,0 +1,29 @@
+{
+    "plugins": [
+        {
+            "name": "anaiis-review",
+            "path": "review",
+            "description": "Code, manuscript, and skill review workflows"
+        },
+        {
+            "name": "anaiis-git",
+            "path": "git",
+            "description": "Git, PR, changelog, and preflight workflows"
+        },
+        {
+            "name": "anaiis-data",
+            "path": "data",
+            "description": "DuckDB queries, dashboards, web verification, and graph analysis"
+        },
+        {
+            "name": "anaiis-writing",
+            "path": "writing",
+            "description": "Literature review and manuscript copyediting"
+        },
+        {
+            "name": "anaiis-meta",
+            "path": "meta",
+            "description": "Claude Code agent orchestration and skill management"
+        }
+    ]
+}
