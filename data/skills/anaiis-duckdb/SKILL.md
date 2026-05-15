@@ -81,8 +81,8 @@ duckdb -c "SELECT * FROM read_json_auto('path/to/file.json') LIMIT 5;"
 
 Excel:
 ```bash
-duckdb -c "INSTALL spatial; LOAD spatial;"
-duckdb -c "SELECT * FROM st_read('path/to/file.xlsx') LIMIT 5;"
+duckdb -c "INSTALL excel; LOAD excel;"
+duckdb -c "SELECT * FROM read_excel_auto('path/to/file.xlsx') LIMIT 5;"
 ```
 
 Avro:
