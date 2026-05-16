@@ -53,12 +53,13 @@ Wait for user confirmation.
 
 ## Phase 3: Review
 
-Initialize the run ledger using `lib/ledger.sh`:
+Initialize the run ledger and round counter using `lib/ledger.sh`:
 
 ```bash
 source lib/ledger.sh
 BRANCH=$(git branch --show-current)
 ledger_init "$BRANCH" "$BASE" "local"
+ROUND=1
 ```
 
 Run the review via the `lib/run-review.sh` wrapper, which captures and normalizes NDJSON output to the shared finding schema:
@@ -171,33 +172,112 @@ If no findings were successfully verified, report "No commits: all findings were
 
 ---
 
-## Phase 7: Re-review and exit
+## Phase 7: Review loop controller
 
-Re-run the review against the same base to confirm findings resolved:
+Phase 7 closes the triage cycle and either exits or continues into the next round. Maximum 3 total review invocations per session (Phase 3 is Round 1; each re-review here increments the counter).
+
+### Round tracking
+
+Initialize `ROUND=1` at the start of Phase 3 (after `ledger_init`). Increment here before each re-review. Log each re-review start:
 
 ```bash
-coderabbit review --agent --base <resolved-base> --no-color [--type <type>] [--dir <dir>] > ~/.claude/anaiis-coderabbit/runs/review-recheck.ndjson 2>&1
+ROUND=$((ROUND + 1))
+ledger_round_start "$ROUND"
 ```
 
-Read the output and report the delta:
-- Findings closed (were in round 1, gone in round 2)
-- Findings still open (appeared in both rounds; may need a follow-up session)
-- New findings introduced by fixes (rare; flag for immediate review)
+### Re-review
 
-Print a summary:
+```bash
+printf '\n[Round %s/3] Running local review against %s...  (30-90s)\n' "$ROUND" "$BASE"
+REVIEW_RECHECK=~/.claude/anaiis-coderabbit/runs/review-recheck-${ROUND}.ndjson
+REVIEW_ERR=~/.claude/anaiis-coderabbit/runs/review-recheck-${ROUND}.err
+timeout 180 bash lib/run-review.sh "$BASE" [--type <type>] [--dir <dir>] \
+    > "$REVIEW_RECHECK" 2> "$REVIEW_ERR"
+EXIT_CODE=$?
+```
+
+**If `EXIT_CODE` is 124** (timeout): print `[Round N/3] Review timed out after 180s. Stopping.` and exit non-zero.
+
+**If `EXIT_CODE` is non-zero (other):** print tail of `$REVIEW_ERR` and stop.
+
+### Severity drift check
+
+After parsing `$REVIEW_RECHECK`, warn on any finding where the severity defaulted to 3 but the body contains no known CodeRabbit tag (`critical`, `major`, `minor`, `nitpick`, `potential issue`, `refactor suggestion`). These are candidates for format drift:
 
 ```
+[Round N/3] Warning: finding <id> has no recognized severity tag. Defaulting to sev-3.
+Check coderabbit CLI output format if this is unexpected.
+```
+
+### Exit conditions (check in order)
+
+**Condition 1: Clean.** Count sev 3-5 findings in `$REVIEW_RECHECK`. If zero:
+- Print clean exit summary (below).
+- Exit.
+
+**Condition 2: Stalled.** Findings remain, but every sev 3-5 finding in `$REVIEW_RECHECK` matches a `file`+`line` pair that already has either a `verify_failed` event or a `decision:"fix"` with no subsequent `verified` event in `$LEDGER`. The surgeon cannot make progress on these.
+- Print stall exit summary (below).
+- Exit.
+
+**Condition 3: Round cap.** `$ROUND` equals 3 and findings remain (not stalled).
+- Print round-cap exit summary (below).
+- Exit.
+
+**Condition 4: Continue.** Findings remain, not stalled, `$ROUND` < 3.
+- Print: `[Round N/3] <count> findings remain at sev 3+. Continuing triage.`
+- Set `REVIEW_OUT="$REVIEW_RECHECK"`.
+- Return to Phase 4 with the new finding set.
+
+### Exit summaries
+
+**Clean:**
+```
+[Round N/3] 0 findings at sev 3+. Branch is clean.
+
 CodeRabbit triage complete.
-  Fixed and committed: <N>
-  Skipped (1-2): <N>
-  Reverted (verify failed): <N>
-  Still open: <N>
-  New findings: <N>
+  Rounds run:             N
+  Fixed and committed:    <total>
+  Skipped (sev 1-2):      <total>
+  Reverted (verify fail): <total>
 
 Next steps:
   /anaiis-gitrebase   -- consolidate commits into logical groups
   /anaiis-changelog   -- generate PR description from clean history
   /anaiis-gitpr       -- open the PR
+```
+
+**Stalled** (surgeon could not fix remaining findings):
+```
+[Round N/3] Stalled: remaining findings were attempted and could not be fixed automatically.
+
+CodeRabbit triage complete (stalled).
+  Rounds run:             N
+  Fixed and committed:    <total>
+  Skipped (sev 1-2):      <total>
+  Reverted (verify fail): <total>
+  Still open:             <count>
+
+Open findings:
+  [<id>] sev=<N>  <file>:<line>  <title>
+
+Address open findings manually, then re-run /anaiis-coderabbit.
+```
+
+**Round cap** (3 rounds exhausted, findings remain):
+```
+[Round 3/3] Round cap reached with <count> findings still open.
+
+CodeRabbit triage complete (cap reached).
+  Rounds run:             3
+  Fixed and committed:    <total>
+  Skipped (sev 1-2):      <total>
+  Reverted (verify fail): <total>
+  Still open:             <count>
+
+Open findings:
+  [<id>] sev=<N>  <file>:<line>  <title>
+
+Re-run /anaiis-coderabbit in a new session to continue.
 ```
 
 Skill exits. It does not auto-chain into the next skill.
@@ -211,6 +291,8 @@ Skill exits. It does not auto-chain into the next skill.
 | Not authenticated | `coderabbit auth login`, then re-run `/anaiis-coderabbit` |
 | On `main` | Create a branch (`git checkout -b coderabbit/<topic>`), then re-run |
 | Review command fails | Show tail of output; check auth or CLI version with `coderabbit --version` |
+| Review times out (code 124) | Network or model latency; wait and re-run |
 | Surgeon blocked (callers need attention) | Fix callers manually or in a follow-up commit, then re-run the skill |
 | All findings skipped or reverted | Report and exit cleanly; nothing to commit |
-| Re-review introduces new findings | Triage them immediately or note for a follow-up session |
+| Stall after round N | Fix open findings manually; re-run in a new session |
+| Round cap hit | Re-run `/anaiis-coderabbit` in a new session to pick up remaining findings |

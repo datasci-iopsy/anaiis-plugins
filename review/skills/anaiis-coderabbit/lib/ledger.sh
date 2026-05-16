@@ -53,6 +53,11 @@ ledger_verify_failed() {
 		'{event:"verify_failed", id:$id, file:$file, reason:$reason}'
 }
 
+ledger_round_start() {
+	local round="$1"
+	_ledger_event --argjson round "$round" '{event:"round_start", round:$round}'
+}
+
 # Print all IDs that already have a terminal event (verified or skip) across all ledgers for this PR.
 # Usage: ledger_handled_ids <pr_number>
 # Prints one ID per line.
