@@ -34,6 +34,7 @@ Examples:
 ## Tool usage
 
 - `Bash(git:*)` and `Bash(git -C *:*)` for all git operations
+- `Bash(git push origin *:*)` for pushing committed fixes (never to main or master)
 - `Bash(coderabbit:*)` for CLI review and auth (local mode only)
 - `Bash(gh:*)` for PR comment fetch and auth check (PR mode only)
 - `Bash(jq:*)` for NDJSON parsing
@@ -89,7 +90,8 @@ Do not pre-load all phase files. Load the active phase file when that phase begi
 - Never edit files while on `main` or `master`.
 - Never `git add -A`, `git add .`, or `--no-verify`.
 - Never amend commits.
-- Never push.
+- Never push to `main` or `master`.
+- Never force-push (`--force` or `--force-with-lease`).
 - Never auto-chain into `/anaiis-gitrebase`, `/anaiis-changelog`, or `/anaiis-gitpr`.
 - Never run `coderabbit review` more than 3 times per session (Round 1 in Phase 3; Rounds 2-3 in Phase 7).
 - Never re-fetch PR comments more than twice per session.
