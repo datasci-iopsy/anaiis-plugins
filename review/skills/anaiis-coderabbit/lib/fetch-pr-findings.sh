@@ -43,7 +43,7 @@ mkdir -p "$OUT"
 gh api \
 	"repos/${REPO}/pulls/${PR}/comments" \
 	--paginate \
-	--jq '[.[] | select(.user.login == "coderabbitai[bot]") | {
+	| jq -s '[.[][] | select(.user.login == "coderabbitai[bot]") | {
         id: .id,
         path: .path,
         line: (.line // .original_line),
@@ -51,19 +51,19 @@ gh api \
         diff_hunk: .diff_hunk,
         commit_id: .commit_id
     }]' \
-	>"${OUT}/pr-inline.json"
+		>"${OUT}/pr-inline.json"
 
 # Top-level PR comments (summary, walkthrough, etc.)
 gh api \
 	"repos/${REPO}/issues/${PR}/comments" \
 	--paginate \
-	--jq '[.[] | select(.user.login == "coderabbitai[bot]") | {
+	| jq -s '[.[][] | select(.user.login == "coderabbitai[bot]") | {
         id: .id,
         path: null,
         line: null,
         body: .body
     }]' \
-	>"${OUT}/pr-summary.json"
+		>"${OUT}/pr-summary.json"
 
 inline_count=$(jq 'length' "${OUT}/pr-inline.json")
 summary_count=$(jq 'length' "${OUT}/pr-summary.json")
