@@ -1,6 +1,6 @@
 ---
 name: anaiis-coderabbit
-description: "CLI-driven CodeRabbit triage in two modes: (1) local pre-PR via coderabbit review --agent; (2) post-PR via gh api against bot comments. Triages by severity, fixes 3-5 with code-surgeon, verifies tests, commits. Never pushes."
+description: "CLI-driven CodeRabbit triage in two modes: (1) local pre-PR via coderabbit review --agent; (2) post-PR via gh api against bot comments. Triages by severity, fixes 3-5 with code-surgeon, verifies tests, commits, and pushes committed fixes with branch safety guards."
 user-invocable: true
 trigger: manual
 version: 0.2.0
@@ -13,7 +13,7 @@ Two modes, one triage loop:
 - **Local mode** (no args): runs `coderabbit review --agent` against the current branch, triages NDJSON findings, fixes severity 3-5, verifies, commits. Use before opening a PR.
 - **PR mode** (`--pr <N>`): fetches CodeRabbit bot comments from GitHub PR #N via `gh api`, normalizes to the same finding shape, then runs the same triage/fix/commit loop. Use after the bot has reviewed your draft PR.
 
-Both modes share Phases 4-6 (triage, verify, commit). Neither mode pushes.
+Both modes share Phases 4-6 (triage, verify, commit). Both modes push committed fixes with a branch safety guard (never main or master, never force-push).
 
 ## Arguments
 
@@ -83,7 +83,7 @@ Do not pre-load all phase files. Load the active phase file when that phase begi
 | 2' | Fetch and normalize | `lib/fetch-pr-findings.sh` + `lib/parse-pr-comments.py` |
 | 3' | Idempotency filter | Drop already-handled IDs via `lib/ledger.sh` |
 | 4-6 | (shared) | Same as local mode |
-| 7' | Exit | Print commit summary + push command; do not push |
+| 7' | Exit | Push committed fixes (guarded); print exit summary |
 
 ## Hard limits
 
