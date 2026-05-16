@@ -107,22 +107,50 @@ Replace `$REVIEW_OUT` reference with `$NEW_OUT` for all subsequent phases.
 
 ## Phase 7': Exit (PR mode)
 
-After Phase 6 (commit), do not re-run `coderabbit review`. Instead:
+After Phase 6 (commit), push committed fixes so the CodeRabbit bot can see them on the next review pass. Do not re-run `coderabbit review`.
 
-Print a commit summary:
+### Push
+
+Run the safety check:
+
+```bash
+BRANCH=$(git branch --show-current)
+if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
+    printf 'ERROR: refusing to push from %s\n' "$BRANCH"
+    exit 1
+fi
+```
+
+Print what is being pushed, then push:
+
+```bash
+PENDING=$(git log "origin/${BRANCH}..HEAD" --oneline 2>/dev/null)
+if [ -n "$PENDING" ]; then
+    COUNT=$(printf '%s\n' "$PENDING" | wc -l | tr -d ' ')
+    printf '\nPushing %s commit(s) to origin/%s:\n' "$COUNT" "$BRANCH"
+    printf '%s\n' "$PENDING"
+    git push origin "$BRANCH"
+else
+    printf '\nNo commits to push (already up to date).\n'
+fi
+```
+
+If `git push` fails: print the error, note that commits remain local, and continue to the exit summary. Do not abort.
+
+### Exit summary
+
 ```
 PR mode complete.
   Fixed and committed: <N>
-  Skipped (1-2): <N>
-  Reverted (verify failed): <N>
+  Skipped (1-2):       <N>
+  Reverted (fail):     <N>
 
-To continue the review loop:
-  git push                            -- run this manually after this skill exits
-  Wait for CodeRabbit bot to re-review.
-  /anaiis-coderabbit --pr <N>         -- pick up new bot comments
+Pushed to origin/<branch>. CodeRabbit bot will re-review shortly.
+When the bot posts new comments, run:
+  /anaiis-coderabbit --pr <N>
 ```
 
-Do not push from inside this skill. Do not open or modify the PR. Exit.
+Do not open or modify the PR. Exit.
 
 ---
 
@@ -134,4 +162,5 @@ Do not push from inside this skill. Do not open or modify the PR. Exit.
 | PR branch mismatch | `git checkout <headRefName>`, then re-run |
 | No bot comments yet | Wait for CodeRabbit CI to finish, then re-run |
 | parse-pr-comments.py fails | Check `uv` is available; run `uv run lib/parse-pr-comments.py --help` |
-| All findings already handled | Nothing to do; push and wait for re-review |
+| All findings already handled | Nothing to do; push runs automatically at exit |
+| Push fails | Commits remain local; run `git push origin <branch>` manually |
