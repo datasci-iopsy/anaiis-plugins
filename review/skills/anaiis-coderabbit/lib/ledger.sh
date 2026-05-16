@@ -54,8 +54,9 @@ ledger_verify_failed() {
 ledger_handled_ids() {
 	local pr="$1"
 	local pattern="PR-${pr}-"
-	find "$LEDGER_DIR" -name "*.jsonl" -print0 2>/dev/null \
-		| xargs -0 grep -hE '"event":"verified"|"event":"skip"' 2>/dev/null \
-		| jq -r --arg pat "$pattern" 'select(.id | startswith($pat)) | .id' 2>/dev/null \
+	[ -d "$LEDGER_DIR" ] || return 0
+	find "$LEDGER_DIR" -name "*.jsonl" -exec cat {} + 2>/dev/null \
+		| jq -r --arg pat "$pattern" \
+			'select((.event == "verified" or .event == "skip") and (.id | startswith($pat))) | .id' 2>/dev/null \
 		| sort -u
 }

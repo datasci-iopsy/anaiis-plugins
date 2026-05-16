@@ -15,6 +15,7 @@ install: $(PLUGINS:%=install-%)
 
 define install_plugin
 install-$(1):
+	@mkdir -p $$(SKILLS)
 	@rsync -a $(1)/skills/ $$(SKILLS)/
 	@if [ -d $(1)/agents ]; then \
 		mkdir -p $$(AGENTS); \
