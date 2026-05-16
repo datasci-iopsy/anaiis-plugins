@@ -29,5 +29,5 @@ $(foreach p,$(PLUGINS),$(eval $(call install_plugin,$(p))))
 smoke:
 	@find . -path '*/lib/smoke.sh' | sort | while read -r s; do \
 		printf '\n=== %s ===\n' "$$s"; \
-		bash "$$s"; \
+		bash "$$s" || exit 1; \
 	done
