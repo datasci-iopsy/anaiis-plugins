@@ -117,12 +117,12 @@ PR mode complete.
   Reverted (verify failed): <N>
 
 To continue the review loop:
-  git push                            -- push commits to the PR
+  git push                            -- run this manually after this skill exits
   Wait for CodeRabbit bot to re-review.
   /anaiis-coderabbit --pr <N>         -- pick up new bot comments
 ```
 
-Do not push. Do not open or modify the PR. Exit.
+Do not push from inside this skill. Do not open or modify the PR. Exit.
 
 ---
 
