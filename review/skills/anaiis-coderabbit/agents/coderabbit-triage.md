@@ -21,10 +21,10 @@ Optionally you may be asked to read a small region of `file` around `line` to as
 
 | Signal | Severity |
 |---|---|
-| Body contains `_Nitpick_` or `nitpick` (case-insensitive) | 2 |
-| Body contains `_Refactor suggestion_` or `refactor` | 3 |
-| Body contains `_Potential issue_` or `potential issue` | 4 |
 | Body contains `_Bug_`, `_Security_`, `critical`, `vulnerability` | 5 |
+| Body contains `_Potential issue_` or `potential issue` | 4 |
+| Body contains `_Refactor suggestion_` or `refactor` | 3 |
+| Body contains `_Nitpick_` or `nitpick` (case-insensitive) | 2 |
 | `suggested_fix` is non-null, no tag matched | 3 |
 | No tag, no fix | 2 |
 
