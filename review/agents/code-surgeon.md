@@ -18,11 +18,11 @@ Context validation (run before any edit):
   callers and files that import or depend on the affected code.
 - If caller files were passed in the prompt, read the relevant sections before editing.
 - If the fix changes a function signature, return type, or exported name, check every
-  caller identified in step 2. A caller is "already addressed" only if it meets one of:
+  caller identified in step 1. A caller is "already addressed" only if it meets one of:
   (1) modified within the same patch or session that introduces the signature change,
   (2) explicitly listed in the PR/prompt as an already-updated caller, or
   (3) static checks (Read, Grep, Glob only, no Bash, no compilation) confirm the callers
-      identified in step 2 are already compatible with the new signature. Callers satisfy
+      identified in step 1 are already compatible with the new signature. Callers satisfy
       condition (3) when ALL of the following hold: the exported symbol name at every call
       site still matches the new name; argument arity at the call site matches the new
       signature, or the new signature uses rest/optional parameters or defaults that cover
