@@ -71,7 +71,7 @@ Do not pre-load all phase files. Load the active phase file when that phase begi
 | 4 | Triage loop | Skip 1-2, coderabbit-triage for 3, surgeon for 3-5 |
 | 5 | Per-fix verification | Run tests via `lib/detect-tests.sh`, revert on failure |
 | 6 | Commit | Group fixes, stage by name |
-| 7 | Re-review and exit | Re-run against same base, report delta |
+| 7 | Review loop controller | Re-run up to 3 rounds total; exit clean, stalled, or at cap |
 
 ### PR mode
 
@@ -91,7 +91,7 @@ Do not pre-load all phase files. Load the active phase file when that phase begi
 - Never amend commits.
 - Never push.
 - Never auto-chain into `/anaiis-gitrebase`, `/anaiis-changelog`, or `/anaiis-gitpr`.
-- Never run `coderabbit review` a third time in the same session.
+- Never run `coderabbit review` more than 3 times per session (Round 1 in Phase 3; Rounds 2-3 in Phase 7).
 - Never re-fetch PR comments more than twice per session.
 - Never remove the JSONL run ledger during the session.
 
