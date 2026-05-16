@@ -53,25 +53,23 @@ Wait for user confirmation.
 
 ## Phase 3: Review
 
-Initialize the run ledger:
+Initialize the run ledger using `lib/ledger.sh`:
 
 ```bash
-mkdir -p ~/.claude/anaiis-coderabbit/runs
-ISO=$(date -u +%Y%m%dT%H%M%SZ)
+source lib/ledger.sh
 BRANCH=$(git branch --show-current)
-LEDGER=~/.claude/anaiis-coderabbit/runs/${BRANCH//\//-}-${ISO}.jsonl
-echo '{"event":"review_started","branch":"'"$BRANCH"'","base":"'"$BASE"'","ts":"'"$ISO"'"}' > "$LEDGER"
+ledger_init "$BRANCH" "$BASE" "local"
 ```
 
-Run the review and capture NDJSON output:
+Run the review via the `lib/run-review.sh` wrapper, which captures and normalizes NDJSON output to the shared finding schema:
 
 ```bash
 REVIEW_OUT=~/.claude/anaiis-coderabbit/runs/review-latest.ndjson
 REVIEW_ERR=~/.claude/anaiis-coderabbit/runs/review-latest.err
-coderabbit review --agent --base <resolved-base> --no-color [--type <type>] [--dir <dir>] > "$REVIEW_OUT" 2> "$REVIEW_ERR"
+bash lib/run-review.sh "$BASE" [--type <type>] [--dir <dir>] > "$REVIEW_OUT" 2> "$REVIEW_ERR"
 ```
 
-Read `$REVIEW_OUT` in full. Parse the NDJSON stream to extract findings. Each finding object will include fields like: `id`, `file` (or `path`), `line` (or `startLine`/`endLine`), `severity` (numeric 1-5 or a label), `title`, `body` (the full finding description), and optionally `suggested_fix`. Adapt to the actual schema in the output.
+Each line of `$REVIEW_OUT` is a finding with fields: `id`, `file`, `line`, `severity` (1-5), `title`, `body`, `suggested_fix` (or null), `source` ("cli").
 
 If the output is empty or contains no findings: report "No findings. Branch is clean against `<base>`." and exit (skip to Phase 7).
 
@@ -85,38 +83,38 @@ For each finding, in severity order (highest first), apply the rubric:
 
 **Severity 1-2 (nitpick / false positive):**
 - Do not edit.
-- Log the skip with a one-sentence rationale to the ledger:
+- Log the skip:
   ```bash
-  echo '{"event":"skip","id":"<id>","severity":<n>,"rationale":"<reason>"}' >> "$LEDGER"
+  ledger_skip "<id>" <n> "<rationale>"
   ```
 - Print: `SKIP [<id>] <title> -- <rationale>`
 
 **Severity 3 (judgment call):**
-- Read the affected file around the reported line.
-- Grep for callers of the affected symbol across the codebase.
-- State in one sentence: the implementation cost, the expected benefit, and whether the change aligns with the user's coding practices (surgical precision, no speculation).
-- Default decision: **fix**, unless the evidence shows the suggested change introduces complexity that outweighs the benefit or contradicts existing patterns.
-- Log decision:
+- Spawn `Agent(subagent_type="coderabbit-triage", description="Triage CR-<id>: <title>")` with the finding body, file, line, and suggested_fix. The agent returns a single-line JSON verdict: `{"severity": 3, "decision": "skip|fix", "rationale": "<one sentence>"}`.
+- Use that verdict for the decision. Log it:
   ```bash
-  echo '{"event":"decision","id":"<id>","severity":3,"decision":"fix|skip","rationale":"<one-sentence>"}' >> "$LEDGER"
+  ledger_decision "<id>" 3 "<decision>" "<rationale>"
   ```
 - If `fix`: proceed to surgeon spawn below.
 - If `skip`: print `SKIP [<id>] <title> -- <rationale>` and continue to next finding.
 
 **Severity 4-5 (real defect / clear improvement):**
-- Log decision `fix` immediately, no extra reasoning.
+- Log decision fix immediately, no extra reasoning:
+  ```bash
+  ledger_decision "<id>" <n> "fix" "severity <n>: fix without triage"
+  ```
 - Proceed to surgeon spawn.
 
 **Surgeon spawn (for all `fix` decisions):**
 
 Spawn an Agent with:
-- `subagent_type`: `general-purpose`
+- `subagent_type`: `code-surgeon`
 - `description`: `Fix CR-<id>: <title>`
 - Prompt must include:
   - The finding text (title + body + suggested_fix)
   - The file path and line range
   - Any prior ledger entries for the same file (read from `$LEDGER` via jq)
-  - Instruction: apply the minimal fix per `claude/agents/code-surgeon.md` rules. No refactors, no surrounding cleanup, no added comments.
+  - Instruction: apply the minimal fix. No refactors, no surrounding cleanup, no added comments.
 
 After the surgeon completes, proceed to Phase 5 immediately before triaging the next finding.
 
@@ -143,11 +141,11 @@ fi
 
 This script prints the test command(s) for the project, one per line, or `none` if no test suite is detected. Run each command. If any command exits non-zero:
 - Revert the fix: `git restore <file>`
-- Log: `{"event":"verify_failed","id":"<id>","file":"<file>","reason":"<short summary of failure>"}` to the ledger
+- Log: `ledger_verify_failed "<id>" "<file>" "<short summary of failure>"`
 - Print: `REVERTED [<id>] <title> -- tests failed: <failure summary>`
 - Do not commit this finding. Continue to the next finding.
 
-If tests pass (or `none` returned): mark the finding ready to commit. Log: `{"event":"verified","id":"<id>"}`.
+If tests pass (or `none` returned): mark the finding ready to commit. Log: `ledger_verified "<id>"`.
 
 Note: formatters (ruff, shfmt, sqlfmt) fire automatically via the PostToolUse hook on every Edit. Treat any hook-reported format changes as already applied.
 
