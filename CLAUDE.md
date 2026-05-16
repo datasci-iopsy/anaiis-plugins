@@ -30,7 +30,6 @@ Point at the error, trace to root cause, fix it. No band-aids.
 scripts/
   lint-skills.py
   count-skill-tokens.py
-Makefile           install and smoke targets
 ```
 
 ## CI: validate workflow
@@ -75,12 +74,21 @@ The inline manifest script mirrors the CI step exactly. If it passes locally, CI
 | Skills | auto-discovered from `skills/*/SKILL.md` | no `skills` array |
 | Required top-level | `$schema`, `name`, `owner` | `author` object |
 
-## Install
+## Install / updates
+
+Skills are delivered via the plugin system. Claude Code fetches plugins directly from
+`datasci-iopsy/anaiis-plugins` on GitHub (registered in `~/.claude/settings.json`
+under `extraKnownMarketplaces`). No local install step is needed.
+
+To propagate skill changes to a machine:
+1. Merge to `main` on GitHub.
+2. Start a new Claude Code session (or force a cache refresh). The updated plugin is
+   fetched automatically from the GitHub source.
+
+To run smoke tests locally:
 
 ```bash
-make install          # sync all plugins to ~/.claude/
-make install-<plugin> # sync one plugin
-make smoke            # run all lib/smoke.sh scripts
+bash review/skills/anaiis-coderabbit/lib/smoke.sh
 ```
 
 ## Git
