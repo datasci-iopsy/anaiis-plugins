@@ -228,6 +228,34 @@ Check coderabbit CLI output format if this is unexpected.
 - Set `REVIEW_OUT="$REVIEW_RECHECK"`.
 - Return to Phase 4 with the new finding set.
 
+### Push committed fixes
+
+Before printing the exit summary, push any commits that landed this session. Run the safety check first:
+
+```bash
+BRANCH=$(git branch --show-current)
+if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
+    printf 'ERROR: refusing to push from %s\n' "$BRANCH"
+    exit 1
+fi
+```
+
+Print what is about to be pushed, then push:
+
+```bash
+PENDING=$(git log "origin/${BRANCH}..HEAD" --oneline 2>/dev/null)
+if [ -n "$PENDING" ]; then
+    COUNT=$(printf '%s\n' "$PENDING" | wc -l | tr -d ' ')
+    printf '\nPushing %s commit(s) to origin/%s:\n' "$COUNT" "$BRANCH"
+    printf '%s\n' "$PENDING"
+    git push origin "$BRANCH"
+else
+    printf '\nNo commits to push (already up to date).\n'
+fi
+```
+
+If `git push` fails: print the error, note that commits remain local, and continue to the exit summary. Do not abort the skill on push failure.
+
 ### Exit summaries
 
 **Clean:**
@@ -296,3 +324,4 @@ Skill exits. It does not auto-chain into the next skill.
 | All findings skipped or reverted | Report and exit cleanly; nothing to commit |
 | Stall after round N | Fix open findings manually; re-run in a new session |
 | Round cap hit | Re-run `/anaiis-coderabbit` in a new session to pick up remaining findings |
+| Push fails | Commits remain local; run `git push origin <branch>` manually |
