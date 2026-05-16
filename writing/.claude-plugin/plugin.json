@@ -1,15 +1,8 @@
 {
     "name": "anaiis-writing",
-    "version": "0.1.0",
     "description": "Literature review and manuscript copyediting",
-    "skills": [
-        {
-            "name": "anaiis-copyedit",
-            "path": "skills/anaiis-copyedit/SKILL.md"
-        },
-        {
-            "name": "anaiis-litreview",
-            "path": "skills/anaiis-litreview/SKILL.md"
-        }
-    ]
+    "version": "0.1.0",
+    "author": {
+        "name": "datasci-iopsy"
+    }
 }
