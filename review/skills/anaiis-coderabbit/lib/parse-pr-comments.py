@@ -18,10 +18,10 @@ Output schema (one JSON object per line):
     }
 
 Severity inference (deterministic, first match wins):
-    Nitpick tag              -> 2
-    Refactor suggestion tag  -> 3
-    Potential issue tag      -> 4
     Bug / Security tag       -> 5
+    Potential issue tag      -> 4
+    Refactor suggestion tag  -> 3
+    Nitpick tag              -> 2
     No tag + has fix         -> 3
     No tag + no fix          -> 2
 """
