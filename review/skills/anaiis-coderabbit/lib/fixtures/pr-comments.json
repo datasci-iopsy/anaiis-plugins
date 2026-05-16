@@ -1,0 +1,52 @@
+{
+    "inline": [
+        {
+            "id": 1001,
+            "path": "src/analysis.R",
+            "line": 42,
+            "body": "_⚠️ Potential issue_\n\nThe `mean()` call on line 42 does not pass `na.rm = TRUE`. This will return `NA` if any values are missing.\n\n```suggestion\nmean(x, na.rm = TRUE)\n```",
+            "diff_hunk": "@@ -40,3 +40,3 @@",
+            "commit_id": "abc123"
+        },
+        {
+            "id": 1002,
+            "path": "src/utils.py",
+            "line": 18,
+            "body": "_🧹 Nitpick_\n\nConsider renaming `tmp` to a more descriptive variable name.",
+            "diff_hunk": "@@ -16,3 +16,3 @@",
+            "commit_id": "abc123"
+        },
+        {
+            "id": 1003,
+            "path": "src/model.py",
+            "line": 77,
+            "body": "_🛠️ Refactor suggestion_\n\nThis function is doing two things. Consider splitting into separate functions.\n\n```python\ndef load_data(path):\n    return pd.read_csv(path)\n\ndef validate_data(df):\n    assert df.shape[0] > 0\n```",
+            "diff_hunk": "@@ -75,8 +75,8 @@",
+            "commit_id": "abc123"
+        },
+        {
+            "id": 1004,
+            "path": "src/auth.py",
+            "line": 12,
+            "body": "_🔒 Security_\n\nCredentials are logged in plain text on line 12. Remove this before merging.",
+            "diff_hunk": "@@ -10,4 +10,4 @@",
+            "commit_id": "abc123"
+        },
+        {
+            "id": 1005,
+            "path": "src/report.R",
+            "line": null,
+            "body": "This function returns a value but the caller never checks it.",
+            "diff_hunk": "@@ -20,2 +20,2 @@",
+            "commit_id": "abc123"
+        }
+    ],
+    "summary": [
+        {
+            "id": 2001,
+            "path": null,
+            "line": null,
+            "body": "## Walkthrough\n\nThis PR adds new analysis functions. Overall the changes look good.\n\n_📝 Nitpick_: The module-level docstring could be improved."
+        }
+    ]
+}
