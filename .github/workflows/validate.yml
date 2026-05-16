@@ -43,7 +43,7 @@ jobs:
           else:
               data = json.loads(mkt.read_text())
               for plugin in data.get("plugins", []):
-                  path = repo / plugin["path"] / ".claude-plugin" / "plugin.json"
+                  path = repo / plugin["source"] / ".claude-plugin" / "plugin.json"
                   if not path.exists():
                       errors.append(f"plugin path missing: {path}")
 

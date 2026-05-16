@@ -1,29 +1,36 @@
 {
+    "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+    "name": "anaiis-plugins",
+    "description": "Research and data science workflow skills for I-O Psychology: literature review, manuscript review, DuckDB analysis, dashboards, git workflows, and more.",
+    "owner": {
+        "name": "datasci-iopsy",
+        "email": "demetrius@mattermore.ai"
+    },
     "plugins": [
         {
             "name": "anaiis-review",
-            "path": "review",
-            "description": "Code, manuscript, and skill review workflows"
+            "description": "Code, manuscript, and skill review workflows",
+            "source": "./review"
         },
         {
             "name": "anaiis-git",
-            "path": "git",
-            "description": "Git, PR, changelog, and preflight workflows"
+            "description": "Git, PR, changelog, and preflight workflows",
+            "source": "./git"
         },
         {
             "name": "anaiis-data",
-            "path": "data",
-            "description": "DuckDB queries, dashboards, web verification, and graph analysis"
+            "description": "DuckDB queries, dashboards, web verification, and graph analysis",
+            "source": "./data"
         },
         {
             "name": "anaiis-writing",
-            "path": "writing",
-            "description": "Literature review and manuscript copyediting"
+            "description": "Literature review and manuscript copyediting",
+            "source": "./writing"
         },
         {
             "name": "anaiis-meta",
-            "path": "meta",
-            "description": "Claude Code agent orchestration and skill management"
+            "description": "Claude Code agent orchestration and skill management",
+            "source": "./meta"
         }
     ]
 }
