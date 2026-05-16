@@ -11,14 +11,20 @@ ledger_init() {
 	local iso
 	iso=$(date -u +%Y%m%dT%H%M%SZ)
 	local safe_branch="${branch//\//-}"
-	LEDGER="${LEDGER_DIR}/${safe_branch}-${iso}.jsonl"
-	local suffix=0
-	while [ -e "$LEDGER" ]; do
+	local suffix=0 candidate
+	while :; do
+		candidate="${LEDGER_DIR}/${safe_branch}-${iso}${suffix:+-${suffix}}.jsonl"
+		if (
+			set -o noclobber
+			: >"$candidate"
+		) 2>/dev/null; then
+			LEDGER="$candidate"
+			break
+		fi
 		suffix=$((suffix + 1))
-		LEDGER="${LEDGER_DIR}/${safe_branch}-${iso}-${suffix}.jsonl"
 	done
 	jq -n --arg branch "$branch" --arg base "$base" --arg mode "$mode" --arg ts "$iso" \
-		'{event:"review_started", branch:$branch, base:$base, mode:$mode, ts:$ts}' >"$LEDGER"
+		'{event:"review_started", branch:$branch, base:$base, mode:$mode, ts:$ts}' >>"$LEDGER"
 	export LEDGER
 }
 
