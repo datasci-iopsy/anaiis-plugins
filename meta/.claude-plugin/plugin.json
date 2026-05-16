@@ -1,11 +1,8 @@
 {
     "name": "anaiis-meta",
-    "version": "0.1.0",
     "description": "Claude Code agent orchestration and skill management",
-    "skills": [
-        {
-            "name": "anaiis-agents",
-            "path": "skills/anaiis-agents/SKILL.md"
-        }
-    ]
+    "version": "0.1.0",
+    "author": {
+        "name": "datasci-iopsy"
+    }
 }
