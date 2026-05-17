@@ -84,7 +84,7 @@ npm install -g coderabbit  # CodeRabbit CLI
 
 ## Optional: integrate with my dotfiles
 
-A companion dotfiles repo (`datasci-iopsy/dotfiles`, private) layers additional
+A companion dotfiles repo (`datasci-iopsy/anaiis-dotfiles`, private) layers additional
 behavior on top of these plugins: global behavioral rules, pre-commit hooks,
 per-language linting configs, and agent definitions that the skills reference.
 

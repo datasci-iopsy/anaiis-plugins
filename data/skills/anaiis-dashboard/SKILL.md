@@ -34,7 +34,7 @@ The manifest (`dashboard.config.json`) is the contract between all three. Never 
 ```bash
 npx playwright --version
 which web-verify
-ls ~/.dotfiles/templates/dashboard/validate_manifest.py
+ls ~/anaiis-dotfiles/templates/dashboard/validate_manifest.py
 # frontend-design must be installed: /plugin install frontend-design@claude-plugins-official
 ```
 

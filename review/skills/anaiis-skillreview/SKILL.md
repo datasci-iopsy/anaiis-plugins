@@ -47,7 +47,7 @@ Read `user_profile.md` if present, use it to calibrate explanation level and con
 ### Step 3, Check recent git history
 
 ```bash
-git -C ~/.dotfiles log --oneline -20
+git -C ~/anaiis-dotfiles log --oneline -20
 ```
 
 Note commits that touched `rules/` or `skills/`. Rules/skills with no recent commits may be drifting from actual usage. Rules that were just recently added can be marked as "new, monitor before proposing changes."
@@ -72,7 +72,7 @@ Cross-reference handoff history, feedback memories, and git log. Surface only du
 
 For each pattern identified, verify whether it is already documented:
 
-Use Grep to search: pattern against `~/.dotfiles/claude/rules/` and `~/.dotfiles/claude/skills/`
+Use Grep to search: pattern against `~/anaiis-dotfiles/claude/rules/` and `~/anaiis-dotfiles/claude/skills/`
 
 Classification:
 - **Already covered, rule strong:** no change needed, note it in "No-action items"
@@ -81,7 +81,7 @@ Classification:
 
 ### Step 6, Write proposal
 
-Save output to `~/.dotfiles/SKILL-REVIEW-<YYYY-MM-DD>.md`
+Save output to `~/anaiis-dotfiles/SKILL-REVIEW-<YYYY-MM-DD>.md`
 
 ```markdown
 # Skill Review, <date>

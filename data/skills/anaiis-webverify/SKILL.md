@@ -34,12 +34,12 @@ npx playwright --version 2>/dev/null || echo "not installed"
 npx playwright install chromium 2>/dev/null | tail -1
 ```
 
-Templates live at `~/.dotfiles/templates/`:
+Templates live at `~/anaiis-dotfiles/templates/`:
 - `playwright-static/` for static HTML
 - `playwright-plotly/` for Plotly Python figures
 - `playwright-ggplot2/` for ggplot2/htmlwidgets output
 
-The `web-verify` helper script at `~/.dotfiles/bin/web-verify` wraps the serve-test-teardown cycle.
+The `web-verify` helper script at `~/anaiis-dotfiles/bin/web-verify` wraps the serve-test-teardown cycle.
 
 ## Phase 1: Scope and scaffold
 
@@ -47,7 +47,7 @@ The `web-verify` helper script at `~/.dotfiles/bin/web-verify` wraps the serve-t
 2. Confirm which template applies (static, plotly, ggplot2).
 3. If the working directory lacks `playwright.config.ts`, copy from the appropriate template:
    ```bash
-   cp -r ~/.dotfiles/templates/playwright-static/. .
+   cp -r ~/anaiis-dotfiles/templates/playwright-static/. .
    npm install --save-dev @playwright/test
    ```
 4. **Gate**: all three must pass before proceeding:
