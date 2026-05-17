@@ -2,7 +2,7 @@
 
 Plugin repo for the anaiis Claude Code skill suite (I-O Psychology research workflows).
 Five plugins: `review`, `git`, `data`, `writing`, `meta`. Global behavioral rules live
-in `~/.claude/CLAUDE.md` and `~/.dotfiles/claude/rules/`; this file adds repo-specific
+in `~/.claude/CLAUDE.md` and `~/anaiis-dotfiles/claude/rules/`; this file adds repo-specific
 instructions layered on top of those.
 
 ---
@@ -157,4 +157,4 @@ This mirrors the CI step exactly.
 - Work on a `claude/<topic>` branch, never on `main` or the user's feature branch.
 - Stage files by name. One concern per commit.
 - Do not push without explicit instruction.
-- Full git rules defer to `~/.dotfiles/claude/rules/git.md`.
+- Full git rules defer to `~/anaiis-dotfiles/claude/rules/git.md`.

@@ -10,7 +10,7 @@ Before writing any code, Claude asks:
 From those answers, write `dashboard.config.json`. Validate immediately:
 
 ```bash
-uv run python ~/.dotfiles/templates/dashboard/validate_manifest.py dashboard.config.json
+uv run python ~/anaiis-dotfiles/templates/dashboard/validate_manifest.py dashboard.config.json
 ```
 
 **Gate**: exits 0 with "OK: manifest valid". If it fails, fix the manifest before continuing.
@@ -99,7 +99,7 @@ Output single-file HTML with all CSS inlined in <style> tags.
 
 **Gate**: validate mount coverage immediately after `frontend-design` writes `index.html`:
 ```bash
-uv run python ~/.dotfiles/templates/dashboard/validate_manifest.py dashboard.config.json --check-mounts index.html
+uv run python ~/anaiis-dotfiles/templates/dashboard/validate_manifest.py dashboard.config.json --check-mounts index.html
 ```
 
 ---
@@ -109,7 +109,7 @@ uv run python ~/.dotfiles/templates/dashboard/validate_manifest.py dashboard.con
 Convert to a single self-contained file:
 
 ```bash
-uv run python ~/.dotfiles/templates/dashboard/inline_charts.py \
+uv run python ~/anaiis-dotfiles/templates/dashboard/inline_charts.py \
     --manifest dashboard.config.json \
     --html index.html \
     --out index.html
