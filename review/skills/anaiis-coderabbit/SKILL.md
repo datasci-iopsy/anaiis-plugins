@@ -1,6 +1,6 @@
 ---
 name: anaiis-coderabbit
-description: "CLI-driven CodeRabbit triage in two modes: (1) local pre-PR via coderabbit review --agent; (2) post-PR via gh api against bot comments. Triages by severity, fixes 3-5 with code-surgeon, verifies tests, commits, and pushes committed fixes with branch safety guards."
+description: "CLI-driven CodeRabbit triage in two modes: (1) local pre-PR via coderabbit review --agent; (2) post-PR via gh api against bot comments. Triages by severity, fixes 3-5 with code-surgeon, verifies with two-stage check (tests + intent), commits, and pushes committed fixes with branch safety guards."
 user-invocable: true
 trigger: manual
 version: 0.2.0
@@ -13,7 +13,7 @@ Two modes, one triage loop:
 - **Local mode** (no args): runs `coderabbit review --agent` against the current branch, triages NDJSON findings, fixes severity 3-5, verifies, commits. Use before opening a PR.
 - **PR mode** (`--pr <N>`): fetches CodeRabbit bot comments from GitHub PR #N via `gh api`, normalizes to the same finding shape, then runs the same triage/fix/commit loop. Use after the bot has reviewed your draft PR.
 
-Both modes share Phases 4-6 (triage, verify, commit). Both modes push committed fixes with a branch safety guard (never main or master, never force-push).
+Both modes share Phases 4-6 (triage, two-stage verify, commit). Verification is two-stage: (1) project tests must pass, then (2) a deterministic preflight and, for sev 4-5 and judgment-call sev-3 findings, an intent-verifier agent confirm the edit addresses the finding's stated concern. Both modes push committed fixes with a branch safety guard (never main or master, never force-push).
 
 ## Arguments
 
@@ -43,10 +43,11 @@ Examples:
 - `Grep`, `Glob`, `Read` for codebase inspection during triage
 - `Agent(subagent_type="code-surgeon", description="Fix CR-<N>: <summary>")` for surgical fixes
 - `Agent(subagent_type="coderabbit-triage", description="Triage CR-<N>: <summary>")` for severity-3 judgment calls
+- `Agent(subagent_type="intent-verifier", description="Verify intent CR-<N>: <summary>")` for post-fix intent verification (sev 4-5 and judgment-call sev-3)
 
 Agent definitions live at:
 - Plugin-level: `review/agents/code-surgeon.md`
-- Skill-local: `agents/coderabbit-triage.md`
+- Skill-local: `agents/coderabbit-triage.md`, `agents/intent-verifier.md`
 
 ## Mode router
 
@@ -70,7 +71,7 @@ Do not pre-load all phase files. Load the active phase file when that phase begi
 | 2 | Scope resolution | Resolve base branch, confirm with user |
 | 3 | Review | Run `coderabbit review --agent` via `lib/run-review.sh`, parse normalized NDJSON |
 | 4 | Triage loop | Skip 1-2, coderabbit-triage for 3, surgeon for 3-5 |
-| 5 | Per-fix verification | Run tests via `lib/detect-tests.sh`, revert on failure |
+| 5 | Per-fix verification | Tests via `lib/detect-tests.sh`; then `lib/intent-preflight.sh` + intent-verifier for sev 4-5 and judgment sev-3; revert on any failure |
 | 6 | Commit | Group fixes, stage by name |
 | 7 | Review loop controller | Re-run up to 3 rounds total; exit clean, stalled, or at cap |
 
@@ -103,7 +104,7 @@ Do not pre-load all phase files. Load the active phase file when that phase begi
 bash lib/smoke.sh
 ```
 
-Runs S1-S5: normalizer fixture, ledger idempotency, severity inference table, gh wiring check, agent contract drift.
+Runs S1-S7: normalizer fixture, ledger idempotency, severity inference table, gh wiring check, agent contract drift, intent-preflight fixture checks (S6), intent-verifier contract (S7). Set `INTENT_JUDGMENT_SMOKE=1` for S7's manual verification scenario.
 
 ## Integration
 
