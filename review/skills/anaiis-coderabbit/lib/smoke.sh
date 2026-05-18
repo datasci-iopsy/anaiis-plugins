@@ -146,20 +146,38 @@ s3() {
 # S4: fetch-pr-findings.sh offline wiring
 # ---------------------------------------------------------------------------
 s4() {
-	if [ "${GH_OFFLINE:-0}" = "1" ]; then
-		pass "S4: skipped (GH_OFFLINE=1)"
-		return
-	fi
-	if ! gh auth status >/dev/null 2>&1; then
-		pass "S4: skipped (gh not authenticated)"
-		return
-	fi
-	# Verify the script is executable and accepts correct args
-	if [ ! -x "${LIB}/fetch-pr-findings.sh" ]; then
+	local fetch="${LIB}/fetch-pr-findings.sh"
+	local errors=0
+
+	if [ ! -x "$fetch" ]; then
 		fail "S4: fetch-pr-findings.sh not executable"
 		return
 	fi
-	pass "S4: fetch-pr-findings.sh present and executable (live test requires a real PR)"
+
+	# Syntax check
+	if ! bash -n "$fetch" 2>/dev/null; then
+		printf '  FAIL S4.1: fetch-pr-findings.sh has bash syntax errors\n'
+		errors=$((errors + 1))
+	fi
+
+	# Wiring: must call gh api (data source) and parse-pr-comments.py (normalizer)
+	if ! grep -q 'gh api' "$fetch"; then
+		printf '  FAIL S4.2: fetch-pr-findings.sh does not call gh api\n'
+		errors=$((errors + 1))
+	fi
+	# Output contract: must write the files parse-pr-comments.py expects as input
+	for outfile in 'pr-inline.json' 'pr-summary.json'; do
+		if ! grep -q "$outfile" "$fetch"; then
+			printf '  FAIL S4.3: fetch-pr-findings.sh missing output file reference: %s\n' "$outfile"
+			errors=$((errors + 1))
+		fi
+	done
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S4: fetch-pr-findings.sh syntax valid, wiring to gh api and parse-pr-comments.py confirmed"
+	else
+		fail "S4: fetch-pr-findings.sh (${errors} checks failed)"
+	fi
 }
 
 # ---------------------------------------------------------------------------
@@ -173,11 +191,13 @@ s5() {
 
 	local errors=0
 
-	# coderabbit-triage must have JSON output sentinel
-	if ! grep -q '"severity"' "$triage" 2>/dev/null; then
-		printf '  FAIL S5.1: coderabbit-triage.md missing JSON output contract sentinel\n'
-		errors=$((errors + 1))
-	fi
+	# coderabbit-triage must have all three output contract fields
+	for field in '"severity"' '"decision"' '"rationale"'; do
+		if ! grep -q "$field" "$triage" 2>/dev/null; then
+			printf '  FAIL S5.1: coderabbit-triage.md missing output field %s\n' "$field"
+			errors=$((errors + 1))
+		fi
+	done
 
 	# intent-verifier must be present (added in 0.1.1)
 	if [ ! -f "$verifier" ]; then
@@ -199,14 +219,13 @@ s5() {
 	fi
 
 	# If ~/.claude/agents/code-surgeon.md is a file-level symlink it bypasses the dotfiles
-	# layer. The correct setup is a plain file in dotfiles/claude/agents/, accessed via
-	# the directory symlink ~/.claude/agents/ -> dotfiles/claude/agents/.
+	# layer and creates a tight coupling to the plugin repo path.
 	if [ -L "$global_surgeon" ]; then
 		local target
 		target=$(readlink "$global_surgeon")
-		printf '[WARN] S5.4: ~/.claude/agents/code-surgeon.md is a file-level symlink (-> %s).\n' "$target"
-		printf '       This bypasses dotfiles. Remove it; the plain file in dotfiles resolves automatically.\n'
-		printf '       Run: rm %s\n' "$global_surgeon"
+		printf '  FAIL S5.4: ~/.claude/agents/code-surgeon.md is a file-level symlink (-> %s).\n' "$target"
+		printf '       Remove it; the plain file in dotfiles resolves automatically: rm %s\n' "$global_surgeon"
+		errors=$((errors + 1))
 	fi
 
 	if [ "$errors" -eq 0 ]; then
@@ -292,11 +311,13 @@ s7() {
 		errors=$((errors + 1))
 	fi
 
-	# Output contract sentinel
-	if ! grep -q '"intent_met"' "$verifier"; then
-		printf '  FAIL S7.2: intent-verifier.md missing output contract sentinel ("intent_met")\n'
-		errors=$((errors + 1))
-	fi
+	# Output contract: both fields must be present
+	for field in '"intent_met"' '"rationale"'; do
+		if ! grep -q "$field" "$verifier"; then
+			printf '  FAIL S7.2: intent-verifier.md missing output field %s\n' "$field"
+			errors=$((errors + 1))
+		fi
+	done
 
 	# Failure-bias directive: must name the declarative-sentence rule
 	if ! grep -q 'declarative' "$verifier"; then
@@ -307,6 +328,12 @@ s7() {
 	# Hedging-language directive must be present
 	if ! grep -q 'hedging\|appears to\|Hedging' "$verifier"; then
 		printf '  FAIL S7.4: intent-verifier.md missing hedging-language failure rule\n'
+		errors=$((errors + 1))
+	fi
+
+	# Verifier must be read-only: Edit and Bash are forbidden in the tools list
+	if grep -qE '^\s+- (Edit|Bash)' "$verifier"; then
+		printf '  FAIL S7.5: intent-verifier.md has write-capable tool (Edit or Bash); verifier must be read-only\n'
 		errors=$((errors + 1))
 	fi
 
