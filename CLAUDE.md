@@ -113,6 +113,29 @@ scripts/
 
 ---
 
+## Skill development lifecycle
+
+Every skill change follows this linear sequence. Do not skip steps or report done until
+the final verification passes.
+
+| Step | Action | Done when |
+|---|---|---|
+| 1. Branch | `git checkout -b claude/<topic>` from the user's feature branch | On correct branch |
+| 2. Edit | Modify skill files, lib scripts, agents, or fixtures | Files changed |
+| 3. Validate | Run local validation block below | Lint + manifest pass |
+| 4. Smoke test | Run `lib/smoke.sh` if the skill has one | All tests pass |
+| 5. Commit | Stage by name, one concern per commit | Clean `git status` |
+| 6. Merge | User merges PR to `main` | Confirmed on `main` |
+| 7. Sync marketplace | `git -C ~/.claude/plugins/marketplaces/anaiis-plugins pull` | Output shows new commits |
+| 8. Refresh plugin | `/plugin` then `/reload-plugins` in Claude Code | No error |
+| 9. Verify cache | Re-run `lib/smoke.sh`; no S5.3 warning | 7/7 pass, no warnings |
+
+**Steps 7-9 are mandatory after every merge that touches skills, agents, or `plugin.json`.**
+New agents and updated skill files are invisible to Claude until the cache is refreshed.
+Surface step 7 proactively after confirming a merge landed on `main`.
+
+---
+
 ## Local validation
 
 Run before any PR that touches skills or manifests:
