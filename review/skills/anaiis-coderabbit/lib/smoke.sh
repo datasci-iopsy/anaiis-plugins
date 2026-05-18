@@ -169,21 +169,51 @@ s5() {
 	local plugin_surgeon="${SKILL_ROOT}/../../agents/code-surgeon.md"
 	local global_surgeon="${HOME}/.claude/agents/code-surgeon.md"
 	local triage="${SKILL_ROOT}/agents/coderabbit-triage.md"
+	local verifier="${SKILL_ROOT}/agents/intent-verifier.md"
+
+	local errors=0
 
 	# coderabbit-triage must have JSON output sentinel
 	if ! grep -q '"severity"' "$triage" 2>/dev/null; then
-		fail "S5: coderabbit-triage.md missing JSON output contract sentinel"
-		return
+		printf '  FAIL S5.1: coderabbit-triage.md missing JSON output contract sentinel\n'
+		errors=$((errors + 1))
 	fi
 
-	# Drift check (warning only)
-	if [ -f "$global_surgeon" ] && [ -f "$plugin_surgeon" ]; then
-		if ! diff -q "$plugin_surgeon" "$global_surgeon" >/dev/null 2>&1; then
-			printf '[WARN] S5: review/agents/code-surgeon.md has drifted from ~/.claude/agents/code-surgeon.md\n'
+	# intent-verifier must be present (added in 0.1.1)
+	if [ ! -f "$verifier" ]; then
+		printf '  FAIL S5.2: agents/intent-verifier.md not found\n'
+		errors=$((errors + 1))
+	fi
+
+	# Plugin cache copy of code-surgeon must match the repo (authoritative comparison).
+	# The cache path encodes the plugin version; derive it from plugin.json.
+	local version
+	version=$(jq -r '.version' "${SKILL_ROOT}/../../.claude-plugin/plugin.json" 2>/dev/null)
+	local cache_surgeon="${HOME}/.claude/plugins/cache/anaiis-plugins/anaiis-review/${version}/agents/code-surgeon.md"
+	if [ -f "$cache_surgeon" ]; then
+		if ! diff -q "$plugin_surgeon" "$cache_surgeon" >/dev/null 2>&1; then
+			printf '[WARN] S5.3: review/agents/code-surgeon.md has drifted from plugin cache (%s). Refresh the plugin.\n' "$version"
 		fi
+	else
+		printf '[WARN] S5.3: plugin cache not found at %s -- plugin may need installing or refreshing.\n' "$cache_surgeon"
 	fi
 
-	pass "S5: agent contracts present"
+	# If ~/.claude/agents/code-surgeon.md is a file-level symlink it bypasses the dotfiles
+	# layer. The correct setup is a plain file in dotfiles/claude/agents/, accessed via
+	# the directory symlink ~/.claude/agents/ -> dotfiles/claude/agents/.
+	if [ -L "$global_surgeon" ]; then
+		local target
+		target=$(readlink "$global_surgeon")
+		printf '[WARN] S5.4: ~/.claude/agents/code-surgeon.md is a file-level symlink (-> %s).\n' "$target"
+		printf '       This bypasses dotfiles. Remove it; the plain file in dotfiles resolves automatically.\n'
+		printf '       Run: rm %s\n' "$global_surgeon"
+	fi
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S5: agent contracts present"
+	else
+		fail "S5: agent contracts (${errors} checks failed)"
+	fi
 }
 
 # ---------------------------------------------------------------------------
