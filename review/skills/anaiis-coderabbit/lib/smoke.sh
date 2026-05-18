@@ -69,10 +69,10 @@ s2() {
 	source "${LIB}/ledger.sh"
 	LEDGER_DIR="$TMP"
 
-	# Simulate three already-handled IDs
-	printf '{"event":"verified","id":"PR-99-1001"}\n' >"$ledger"
+	# Simulate three already-handled IDs (intent_verified is terminal; bare verified is not)
+	printf '{"event":"intent_verified","id":"PR-99-1001"}\n' >"$ledger"
 	printf '{"event":"skip","id":"PR-99-1002","severity":2,"rationale":"nitpick"}\n' >>"$ledger"
-	printf '{"event":"verified","id":"PR-99-1003"}\n' >>"$ledger"
+	printf '{"event":"intent_verified","id":"PR-99-1003"}\n' >>"$ledger"
 
 	# Build a findings list: 3 handled + 2 new
 	local findings="${TMP}/findings2.ndjson"
@@ -187,6 +187,121 @@ s5() {
 }
 
 # ---------------------------------------------------------------------------
+# S6: intent-preflight.sh fixture checks
+# ---------------------------------------------------------------------------
+s6() {
+	local preflight="${LIB}/intent-preflight.sh"
+	local fixtures="${FIXTURES}/preflight"
+
+	if [ ! -x "$preflight" ]; then
+		fail "S6: intent-preflight.sh not executable"
+		return
+	fi
+
+	local errors=0 reason
+
+	# 1. Named file touched, hunk in range, real code change -> PASS
+	if ! INTENT_PREFLIGHT_DIFF="${fixtures}/edit-touches-named-file.diff" \
+		bash "$preflight" "R/analysis.R" 10 12 >/dev/null 2>&1; then
+		printf '  FAIL S6.1: edit-touches-named-file should pass preflight\n'
+		errors=$((errors + 1))
+	fi
+
+	# 2. Empty diff (surgeon edited a different file) -> FAIL preflight:wrong-file
+	if reason=$(INTENT_PREFLIGHT_DIFF="${fixtures}/edit-touches-different-file.diff" \
+		bash "$preflight" "R/analysis.R" 10 12 2>&1); then
+		printf '  FAIL S6.2: edit-touches-different-file should fail preflight\n'
+		errors=$((errors + 1))
+	elif [ "$reason" != "preflight:wrong-file" ]; then
+		printf '  FAIL S6.2: wrong reason (got %s, want preflight:wrong-file)\n' "$reason"
+		errors=$((errors + 1))
+	fi
+
+	# 3. Comment-only change -> FAIL preflight:comment-only
+	if reason=$(INTENT_PREFLIGHT_DIFF="${fixtures}/edit-is-comment-only.diff" \
+		bash "$preflight" "R/analysis.R" 10 12 2>&1); then
+		printf '  FAIL S6.3: edit-is-comment-only should fail preflight\n'
+		errors=$((errors + 1))
+	elif [ "$reason" != "preflight:comment-only" ]; then
+		printf '  FAIL S6.3: wrong reason (got %s, want preflight:comment-only)\n' "$reason"
+		errors=$((errors + 1))
+	fi
+
+	# 4. Edit at line 26 overlaps finding at line 10 via +-20 window -> PASS
+	if ! INTENT_PREFLIGHT_DIFF="${fixtures}/edit-overlaps-line-range.diff" \
+		bash "$preflight" "R/analysis.R" 10 12 >/dev/null 2>&1; then
+		printf '  FAIL S6.4: edit-overlaps-line-range should pass preflight\n'
+		errors=$((errors + 1))
+	fi
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S6: intent-preflight (4 fixture checks: 2 pass, 2 fail-with-reason)"
+	else
+		fail "S6: intent-preflight (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# S7: intent-verifier agent contract check (structural; judgment is reviewed not tested)
+# Set INTENT_JUDGMENT_SMOKE=1 to also print the manual verification scenario.
+# ---------------------------------------------------------------------------
+s7() {
+	local verifier="${SKILL_ROOT}/agents/intent-verifier.md"
+	local jp="${FIXTURES}/judgment-pairs"
+
+	if [ ! -f "$verifier" ]; then
+		fail "S7: agents/intent-verifier.md not found"
+		return
+	fi
+
+	local errors=0
+
+	# Frontmatter: correct model tier for a judgment task
+	if ! grep -q 'model: claude-sonnet-4-6' "$verifier"; then
+		printf '  FAIL S7.1: intent-verifier.md missing model: claude-sonnet-4-6\n'
+		errors=$((errors + 1))
+	fi
+
+	# Output contract sentinel
+	if ! grep -q '"intent_met"' "$verifier"; then
+		printf '  FAIL S7.2: intent-verifier.md missing output contract sentinel ("intent_met")\n'
+		errors=$((errors + 1))
+	fi
+
+	# Failure-bias directive: must name the declarative-sentence rule
+	if ! grep -q 'declarative' "$verifier"; then
+		printf '  FAIL S7.3: intent-verifier.md missing declarative-sentence directive\n'
+		errors=$((errors + 1))
+	fi
+
+	# Hedging-language directive must be present
+	if ! grep -q 'hedging\|appears to\|Hedging' "$verifier"; then
+		printf '  FAIL S7.4: intent-verifier.md missing hedging-language failure rule\n'
+		errors=$((errors + 1))
+	fi
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S7: intent-verifier agent contract (model tier, output format, bias directives)"
+	else
+		fail "S7: intent-verifier contract (${errors} sentinel checks failed)"
+	fi
+
+	# Optional: print manual verification scenario
+	if [ "${INTENT_JUDGMENT_SMOKE:-0}" = "1" ]; then
+		printf '\n--- S7 manual verification scenario ---\n'
+		printf 'Finding:\n'
+		cat "${jp}/finding.json"
+		printf '\nExpected: good-fix.diff -> intent_met: true\n'
+		cat "${jp}/good-fix.diff"
+		printf '\nExpected: bad-fix.diff -> intent_met: false\n'
+		cat "${jp}/bad-fix.diff"
+		printf '\nRun the skill against a branch with the bad-fix applied and confirm\n'
+		printf 'the ledger contains an intent_failed event for this finding.\n'
+		printf '---\n\n'
+	fi
+}
+
+# ---------------------------------------------------------------------------
 # Run all
 # ---------------------------------------------------------------------------
 printf '=== anaiis-coderabbit smoke tests ===\n'
@@ -195,6 +310,8 @@ s2
 s3
 s4
 s5
+s6
+s7
 
 printf '\nResults: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
