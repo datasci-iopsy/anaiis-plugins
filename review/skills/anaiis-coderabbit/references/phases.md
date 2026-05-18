@@ -261,7 +261,7 @@ Check coderabbit CLI output format if this is unexpected.
 - Print clean exit summary (below).
 - Exit.
 
-**Condition 2: Stalled.** Findings remain, but every sev 3-5 finding in `$REVIEW_RECHECK` matches a `file`+`line` pair that already has either a `verify_failed` or `intent_failed` event, or a `decision:"fix"` with no subsequent `intent_verified` event in `$LEDGER`. The surgeon cannot make progress on these.
+**Condition 2: Stalled.** Findings remain, but every sev 3-5 finding in `$REVIEW_RECHECK` matches a `file`+`line` pair that already has either a `verify_failed` or `intent_failed` event, or a `decision:"fix"` with no subsequent `intent_verified` event in `$LEDGER`. Both `verify_failed` (tests failed) and `intent_failed` (intent check failed) are stall signals: a subsequent surgeon round would face the same barrier. The surgeon cannot make further progress on these findings.
 - Print stall exit summary (below).
 - Exit.
 
@@ -309,11 +309,11 @@ If `git push` fails: print the error, note that commits remain local, and contin
 [Round N/3] 0 findings at sev 3+. Branch is clean.
 
 CodeRabbit triage complete.
-  Rounds run:             N
-  Fixed and committed:    <total>
-  Skipped (sev 1-2):      <total>
-  Reverted (verify fail):  <total>
-  Reverted (intent fail):  <total>
+  Rounds run:                       N
+  Fixed and committed:              <total>
+  Skipped (sev 1-2):                <total>
+  Reverted (verify fail):           <total>
+  Reverted (intent fail):           <total>  (<N of M> were sev-3 judgment findings)
 
 Next steps:
   /anaiis-gitrebase   -- consolidate commits into logical groups
@@ -326,12 +326,12 @@ Next steps:
 [Round N/3] Stalled: remaining findings were attempted and could not be fixed automatically.
 
 CodeRabbit triage complete (stalled).
-  Rounds run:             N
-  Fixed and committed:    <total>
-  Skipped (sev 1-2):      <total>
-  Reverted (verify fail):  <total>
-  Reverted (intent fail):  <total>
-  Still open:             <count>
+  Rounds run:                       N
+  Fixed and committed:              <total>
+  Skipped (sev 1-2):                <total>
+  Reverted (verify fail):           <total>
+  Reverted (intent fail):           <total>  (<N of M> were sev-3 judgment findings)
+  Still open:                       <count>
 
 Open findings:
   [<id>] sev=<N>  <file>:<line>  <title>
@@ -344,12 +344,12 @@ Address open findings manually, then re-run /anaiis-coderabbit.
 [Round 3/3] Round cap reached with <count> findings still open.
 
 CodeRabbit triage complete (cap reached).
-  Rounds run:             3
-  Fixed and committed:    <total>
-  Skipped (sev 1-2):      <total>
-  Reverted (verify fail):  <total>
-  Reverted (intent fail):  <total>
-  Still open:             <count>
+  Rounds run:                       3
+  Fixed and committed:              <total>
+  Skipped (sev 1-2):                <total>
+  Reverted (verify fail):           <total>
+  Reverted (intent fail):           <total>  (<N of M> were sev-3 judgment findings)
+  Still open:                       <count>
 
 Open findings:
   [<id>] sev=<N>  <file>:<line>  <title>
