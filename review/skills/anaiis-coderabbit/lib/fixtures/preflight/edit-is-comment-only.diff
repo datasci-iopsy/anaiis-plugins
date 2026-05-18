@@ -1,0 +1,9 @@
+--- a/R/analysis.R
++++ b/R/analysis.R
+@@ -8,6 +8,7 @@
+
+ score_items <- function(items) {
++  # Compute the mean score across all items
+   mean(items)
+ }
+

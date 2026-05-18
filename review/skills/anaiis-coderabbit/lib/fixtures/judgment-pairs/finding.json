@@ -1,0 +1,10 @@
+{
+    "id": "PR-42-2001",
+    "file": "R/analysis.R",
+    "line": 10,
+    "severity": 4,
+    "title": "mean() called without na.rm argument",
+    "body": "_Potential issue_: `mean(items)` will return `NA` if any input value is `NA`. Add `na.rm = TRUE` to handle missing values and return the mean of non-NA items.",
+    "suggested_fix": "```r\nmean(items, na.rm = TRUE)\n```",
+    "source": "cli"
+}

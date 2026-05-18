@@ -146,7 +146,53 @@ This script prints the test command(s) for the project, one per line, or `none` 
 - Print: `REVERTED [<id>] <title> -- tests failed: <failure summary>`
 - Do not commit this finding. Continue to the next finding.
 
-If tests pass (or `none` returned): mark the finding ready to commit. Log: `ledger_verified "<id>"`.
+If tests pass (or `none` returned): log `ledger_verified "<id>"` (intermediate: tests passed, intent check pending), then run the deterministic preflight:
+
+```bash
+preflight_reason=""
+if ! preflight_reason=$(bash lib/intent-preflight.sh "<finding.file>" <line_start> <line_end> 2>&1); then
+    ledger_intent_failed "<id>" "<finding.file>" "$preflight_reason"
+    git restore "<finding.file>"
+    # Print: REVERTED [<id>] <title> -- preflight failed: <preflight_reason>
+    # Continue to next finding.
+fi
+ledger_intent_verified "<id>"
+```
+
+`intent-preflight.sh` checks three things: (1) the surgeon edited the named file (diff non-empty), (2) at least one hunk overlaps the finding's line range within a ±20-line window, and (3) the diff contains at least one non-comment, non-whitespace line. On any failure it exits 1 with a `preflight:<code>` reason on stderr.
+
+On preflight pass, check whether this finding needs intent verification:
+
+- **Sev 4-5**, or **sev 3 where the triage decision came from `coderabbit-triage`** (a judgment call, recorded in `$LEDGER` as a `decision` event with source `coderabbit-triage`): spawn the verifier.
+- **Sev 3 with a mechanical `suggested_fix`** (triage decision logged as `"fix"` without spawning `coderabbit-triage`, meaning the fix was mechanical): skip the verifier and emit `ledger_intent_verified "<id>"` directly.
+- **Surgeon returned `Already resolved:`**: emit `ledger_intent_verified "<id>"` directly without preflight or verifier.
+- **Surgeon returned `Blocked:`**: no `verified` event; preserve existing behavior.
+
+**Verifier spawn (sev 4-5 or judgment sev-3):**
+
+Spawn an Agent with:
+- `subagent_type`: `intent-verifier`
+- `description`: `Verify intent CR-<id>: <title>`
+- Prompt must include: the finding `body`, `suggested_fix`, and the post-surgeon diff hunk (`git diff HEAD -- <file>`)
+
+The agent returns one line of JSON: `{"intent_met": <true|false>, "rationale": "<one sentence>"}`.
+
+- If `intent_met: true`: log `ledger_intent_verified "<id>"`. The finding is ready to commit.
+- If `intent_met: false`: log `ledger_intent_failed "<id>" "<file>" "<rationale>"`, revert `git restore "<file>"`, print `REVERTED [<id>] <title> -- intent failed: <rationale>`, and continue to next finding.
+
+**Rollback path (if verifier proves too aggressive for your codebase):**
+
+If a real run reverts more than ~30% of legitimate fixes, or an adopter reports the 3-round cap hitting on routine work, wrap the verifier spawn in an env-var guard:
+
+```bash
+if [[ "${INTENT_VERIFY:-1}" == "1" ]]; then
+    # ... preflight + verifier spawn ...
+else
+    ledger_intent_verified "$id"  # bypass; old behavior
+fi
+```
+
+Default `INTENT_VERIFY=1` (verifier on). Set `INTENT_VERIFY=0` to restore pre-verifier termination behavior without reverting commits.
 
 Note: formatters (ruff, shfmt, sqlfmt) fire automatically via the PostToolUse hook on every Edit. Treat any hook-reported format changes as already applied.
 
@@ -215,7 +261,7 @@ Check coderabbit CLI output format if this is unexpected.
 - Print clean exit summary (below).
 - Exit.
 
-**Condition 2: Stalled.** Findings remain, but every sev 3-5 finding in `$REVIEW_RECHECK` matches a `file`+`line` pair that already has either a `verify_failed` event or a `decision:"fix"` with no subsequent `verified` event in `$LEDGER`. The surgeon cannot make progress on these.
+**Condition 2: Stalled.** Findings remain, but every sev 3-5 finding in `$REVIEW_RECHECK` matches a `file`+`line` pair that already has either a `verify_failed` or `intent_failed` event, or a `decision:"fix"` with no subsequent `intent_verified` event in `$LEDGER`. The surgeon cannot make progress on these.
 - Print stall exit summary (below).
 - Exit.
 
@@ -266,7 +312,8 @@ CodeRabbit triage complete.
   Rounds run:             N
   Fixed and committed:    <total>
   Skipped (sev 1-2):      <total>
-  Reverted (verify fail): <total>
+  Reverted (verify fail):  <total>
+  Reverted (intent fail):  <total>
 
 Next steps:
   /anaiis-gitrebase   -- consolidate commits into logical groups
@@ -282,7 +329,8 @@ CodeRabbit triage complete (stalled).
   Rounds run:             N
   Fixed and committed:    <total>
   Skipped (sev 1-2):      <total>
-  Reverted (verify fail): <total>
+  Reverted (verify fail):  <total>
+  Reverted (intent fail):  <total>
   Still open:             <count>
 
 Open findings:
@@ -299,7 +347,8 @@ CodeRabbit triage complete (cap reached).
   Rounds run:             3
   Fixed and committed:    <total>
   Skipped (sev 1-2):      <total>
-  Reverted (verify fail): <total>
+  Reverted (verify fail):  <total>
+  Reverted (intent fail):  <total>
   Still open:             <count>
 
 Open findings:

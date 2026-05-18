@@ -64,7 +64,22 @@ ledger_round_start() {
 	_ledger_event --argjson round "$round" '{event:"round_start", round:$round}'
 }
 
-# Print all IDs that already have a terminal event (verified or skip) across all ledgers for this PR.
+# verified: intermediate event (tests passed, pending intent check).
+# intent_verified: terminal event (tests passed AND intent confirmed).
+# Note: ledger files written before the intent-verification change used verified as terminal;
+# those are not replayable via ledger_handled_ids without special-casing pre-change runs.
+ledger_intent_verified() {
+	local id="$1"
+	_ledger_event --arg id "$id" '{event:"intent_verified", id:$id}'
+}
+
+ledger_intent_failed() {
+	local id="$1" file="$2" reason="$3"
+	_ledger_event --arg id "$id" --arg file "$file" --arg reason "$reason" \
+		'{event:"intent_failed", id:$id, file:$file, reason:$reason}'
+}
+
+# Print all IDs that already have a terminal event (intent_verified or skip) across all ledgers for this PR.
 # Usage: ledger_handled_ids <pr_number>
 # Prints one ID per line.
 ledger_handled_ids() {
@@ -73,6 +88,6 @@ ledger_handled_ids() {
 	[ -d "$LEDGER_DIR" ] || return 0
 	find "$LEDGER_DIR" -name "*.jsonl" -exec cat {} + 2>/dev/null \
 		| jq -r --arg pat "$pattern" \
-			'select((.event == "verified" or .event == "skip") and (.id | startswith($pat))) | .id' 2>/dev/null \
+			'select((.event == "intent_verified" or .event == "skip") and (.id | startswith($pat))) | .id' 2>/dev/null \
 		| sort -u
 }

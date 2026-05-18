@@ -1,0 +1,9 @@
+--- a/R/analysis.R
++++ b/R/analysis.R
+@@ -26,7 +26,7 @@
+
+ helper_fn <- function(x) {
+-  x * 2
++  x * 2L
+ }
+
