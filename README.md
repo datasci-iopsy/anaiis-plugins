@@ -10,7 +10,7 @@ git housekeeping.
 |---|---|
 | **anaiis-review** | CodeRabbit triage, document audit, manuscript peer review, skill review |
 | **anaiis-git** | PR creation, commit rebase, changelog generation, environment preflight |
-| **anaiis-data** | DuckDB ad hoc queries, dashboards, web verification, knowledge graphs |
+| **anaiis-data** | DuckDB ad hoc queries, dashboards, terminal charts, web verification, knowledge graphs |
 | **anaiis-writing** | Literature review synthesis, manuscript copyediting |
 | **anaiis-meta** | Parallel subagent orchestration |
 
@@ -55,6 +55,7 @@ Once installed, invoke skills by name at the prompt:
 /anaiis-coderabbit              -- triage CodeRabbit findings and fix severity-3+ issues
 /anaiis-litreview "topic"       -- synthesize literature from your local catalog
 /anaiis-duckdb                  -- query a local CSV, Parquet, or Excel file
+/anaiis-termchart               -- quick ASCII/ANSI charts in the terminal (also auto-triggers on viz requests)
 /anaiis-gitpr                   -- open a pull request with a structured body
 /anaiis-peerreview              -- peer-review a manuscript draft
 ```
