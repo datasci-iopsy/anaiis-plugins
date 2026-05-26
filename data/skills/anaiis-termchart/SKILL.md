@@ -1,6 +1,6 @@
 ---
 name: anaiis-termchart
-description: Quick exploratory ASCII/ANSI charts in the terminal — bars, lines, sparklines, histograms, grouped bars. Auto-triggers when the user asks to visualize, chart, plot, or graph data inline in the terminal.
+description: Quick exploratory ASCII/ANSI charts in the terminal (bars, lines, sparklines, histograms, grouped bars). Auto-triggers when the user asks to visualize, chart, plot, graph, compare, or show a distribution of data inline in the terminal, or requests a sparkline.
 user-invocable: true
 trigger: hybrid
 version: 0.1.0
