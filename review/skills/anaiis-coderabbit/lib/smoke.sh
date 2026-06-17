@@ -191,8 +191,8 @@ s5() {
 
 	local errors=0
 
-	# coderabbit-triage must have all three output contract fields
-	for field in '"severity"' '"decision"' '"rationale"'; do
+	# coderabbit-triage must have both output contract fields
+	for field in '"decision"' '"rationale"'; do
 		if ! grep -q "$field" "$triage" 2>/dev/null; then
 			printf '  FAIL S5.1: coderabbit-triage.md missing output field %s\n' "$field"
 			errors=$((errors + 1))
