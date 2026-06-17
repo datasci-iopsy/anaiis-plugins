@@ -91,7 +91,7 @@ For each finding, in severity order (highest first), apply the rubric:
 - Print: `SKIP [<id>] <title> -- <rationale>`
 
 **Severity 3 (judgment call):**
-- Spawn `Agent(subagent_type="coderabbit-triage", description="Triage CR-<id>: <title>")` with the finding body, file, line, and suggested_fix. The agent returns a single-line JSON verdict: `{"severity": 3, "decision": "skip|fix", "rationale": "<one sentence>"}`.
+- Spawn `Agent(subagent_type="coderabbit-triage", description="Triage CR-<id>: <title>")` with the finding body, file, line, and suggested_fix. The agent returns a single-line JSON verdict: `{"decision": "skip|fix", "rationale": "<one sentence>"}`.
 - Use that verdict for the decision. Log it:
   ```bash
   ledger_decision "<id>" 3 "<decision>" "<rationale>"
