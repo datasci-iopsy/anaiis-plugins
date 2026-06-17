@@ -186,8 +186,8 @@ s4() {
 s5() {
 	local plugin_surgeon="${SKILL_ROOT}/../../agents/code-surgeon.md"
 	local global_surgeon="${HOME}/.claude/agents/code-surgeon.md"
-	local triage="${SKILL_ROOT}/agents/coderabbit-triage.md"
-	local verifier="${SKILL_ROOT}/agents/intent-verifier.md"
+	local triage="${SKILL_ROOT}/../../agents/coderabbit-triage.md"
+	local verifier="${SKILL_ROOT}/../../agents/intent-verifier.md"
 
 	local errors=0
 
@@ -295,7 +295,7 @@ s6() {
 # Set INTENT_JUDGMENT_SMOKE=1 to also print the manual verification scenario.
 # ---------------------------------------------------------------------------
 s7() {
-	local verifier="${SKILL_ROOT}/agents/intent-verifier.md"
+	local verifier="${SKILL_ROOT}/../../agents/intent-verifier.md"
 	local jp="${FIXTURES}/judgment-pairs"
 
 	if [ ! -f "$verifier" ]; then

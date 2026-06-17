@@ -3,7 +3,7 @@ name: anaiis-coderabbit
 description: "CLI-driven CodeRabbit triage in two modes: (1) local pre-PR via coderabbit review --agent; (2) post-PR via gh api against bot comments. Triages by severity, fixes 3-5 with code-surgeon, verifies with two-stage check (tests + intent), commits, and pushes committed fixes with branch safety guards."
 user-invocable: true
 trigger: manual
-version: 0.2.0
+version: 0.2.1
 ---
 
 # anaiis-coderabbit: CLI-Driven CodeRabbit Triage
@@ -46,8 +46,7 @@ Examples:
 - `Agent(subagent_type="intent-verifier", description="Verify intent CR-<N>: <summary>")` for post-fix intent verification (sev 4-5 and judgment-call sev-3)
 
 Agent definitions live at:
-- Plugin-level: `review/agents/code-surgeon.md`
-- Skill-local: `agents/coderabbit-triage.md`, `agents/intent-verifier.md`
+- Plugin-level: `review/agents/code-surgeon.md`, `review/agents/coderabbit-triage.md`, `review/agents/intent-verifier.md`
 
 ## Mode router
 
