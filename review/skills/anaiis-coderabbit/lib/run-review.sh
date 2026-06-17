@@ -32,7 +32,7 @@ fi
 # Filters only type=="finding" lines; status/context lines are discarded.
 # Actual CLI schema: fileName, codegenInstructions, suggestions[], severity (label).
 # Output schema: {id, file, line, severity, title, body, suggested_fix, source}
-coderabbit review --agent --base "$BASE" --no-color "$@" \
+coderabbit review --agent --base "$BASE" "$@" \
 	| jq -c 'select(.type == "finding")' \
 	| jq -sc 'to_entries[] | .value + {_idx: (.key + 1)}' \
 	| jq -c '
