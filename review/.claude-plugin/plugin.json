@@ -1,7 +1,7 @@
 {
     "name": "anaiis-review",
     "description": "Code, manuscript, and skill review workflows",
-    "version": "0.1.2",
+    "version": "0.1.5",
     "author": {
         "name": "datasci-iopsy"
     }
