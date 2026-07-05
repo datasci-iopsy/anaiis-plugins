@@ -359,6 +359,242 @@ s7() {
 }
 
 # ---------------------------------------------------------------------------
+# S8: review-round.sh deterministic timeout + one free retry
+# Fully offline: REVIEW_CMD injects a mock in place of the real coderabbit CLI,
+# mirroring the INTENT_PREFLIGHT_DIFF injection seam used by S6. Mocks exit
+# 124 directly (rather than sleeping), so no check waits on wall-clock time.
+# ---------------------------------------------------------------------------
+s8() {
+	local rr="${LIB}/review-round.sh"
+	if [ ! -x "$rr" ]; then
+		fail "S8: review-round.sh not executable"
+		return
+	fi
+
+	local errors=0 out err code
+
+	# 1. Immediate success -> exit 0, finding on stdout
+	local mock_ok="${TMP}/mock-ok.sh"
+	cat >"$mock_ok" <<'EOF'
+#!/usr/bin/env bash
+printf '{"type":"finding","fileName":"a.R","severity":"major"}\n'
+exit 0
+EOF
+	chmod +x "$mock_ok"
+	if out=$(REVIEW_CMD="$mock_ok" REVIEW_TIMEOUT=5 bash "$rr" "main" 2>/dev/null); then
+		if [ -z "$out" ]; then
+			printf '  FAIL S8.1: expected finding on stdout, got nothing\n'
+			errors=$((errors + 1))
+		fi
+	else
+		printf '  FAIL S8.1: expected exit 0 on immediate success (got %s)\n' "$?"
+		errors=$((errors + 1))
+	fi
+
+	# 2. Timeout on attempt 1, success on the free retry -> exit 20, finding on stdout
+	local counter="${TMP}/s8-counter"
+	: >"$counter"
+	local mock_recover="${TMP}/mock-recover.sh"
+	cat >"$mock_recover" <<EOF
+#!/usr/bin/env bash
+n=\$(cat "$counter")
+n=\$((n + 1))
+printf '%s' "\$n" >"$counter"
+if [ "\$n" -eq 1 ]; then
+    exit 124
+fi
+printf '{"type":"finding","fileName":"b.R","severity":"minor"}\n'
+exit 0
+EOF
+	chmod +x "$mock_recover"
+	if out=$(REVIEW_CMD="$mock_recover" REVIEW_TIMEOUT=5 bash "$rr" "main" 2>/dev/null); then
+		printf '  FAIL S8.2: expected exit 20 (recovered after retry), got 0\n'
+		errors=$((errors + 1))
+	else
+		code=$?
+		if [ "$code" -ne 20 ]; then
+			printf '  FAIL S8.2: expected exit 20 (recovered after retry), got %s\n' "$code"
+			errors=$((errors + 1))
+		elif [ -z "$out" ]; then
+			printf '  FAIL S8.2: expected finding on stdout after recovery, got nothing\n'
+			errors=$((errors + 1))
+		fi
+	fi
+
+	# 3. Timeout on both the initial attempt and the free retry -> exit 21, reason on stderr
+	local mock_stuck="${TMP}/mock-stuck.sh"
+	cat >"$mock_stuck" <<'EOF'
+#!/usr/bin/env bash
+exit 124
+EOF
+	chmod +x "$mock_stuck"
+	if err=$(REVIEW_CMD="$mock_stuck" REVIEW_TIMEOUT=5 bash "$rr" "main" 2>&1 1>/dev/null); then
+		printf '  FAIL S8.3: expected exit 21 (timeout-exhausted), got 0\n'
+		errors=$((errors + 1))
+	else
+		code=$?
+		if [ "$code" -ne 21 ]; then
+			printf '  FAIL S8.3: expected exit 21 (timeout-exhausted), got %s\n' "$code"
+			errors=$((errors + 1))
+		elif ! printf '%s' "$err" | grep -q 'review-round:timeout-exhausted'; then
+			printf '  FAIL S8.3: expected stderr reason review-round:timeout-exhausted\n'
+			errors=$((errors + 1))
+		fi
+	fi
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S8: review-round.sh timeout+retry (success, recovered, exhausted)"
+	else
+		fail "S8: review-round.sh (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# S9: ledger_intent_verified refuses to log the terminal event when
+# verification was required but never happened. Direct regression guard for
+# the CLI-1 session where intent_verified was logged before the verifier ran.
+# ---------------------------------------------------------------------------
+s9() {
+	local ledger="${TMP}/s9.jsonl"
+	export LEDGER="$ledger"
+	# shellcheck source=lib/ledger.sh
+	source "${LIB}/ledger.sh"
+	LEDGER_DIR="$TMP"
+
+	local errors=0
+
+	# 1. requires_verify=true, no verifier_result yet -> MUST refuse
+	: >"$ledger"
+	ledger_decision "S9-1" 4 "fix" "sev4: fix without triage" true
+	if ledger_intent_verified "S9-1" 2>/dev/null; then
+		printf '  FAIL S9.1: expected ledger_intent_verified to refuse with no verifier_result, but it succeeded\n'
+		errors=$((errors + 1))
+	elif grep -q '"event":"intent_verified"' "$ledger"; then
+		printf '  FAIL S9.1: intent_verified event was written despite the refusal\n'
+		errors=$((errors + 1))
+	fi
+
+	# 2. requires_verify=true, passing verifier_result -> MUST succeed
+	: >"$ledger"
+	ledger_decision "S9-2" 4 "fix" "sev4: fix without triage" true
+	ledger_verifier_result "S9-2" true "confirmed"
+	if ! ledger_intent_verified "S9-2" 2>/dev/null; then
+		printf '  FAIL S9.2: expected ledger_intent_verified to succeed with a passing verifier_result\n'
+		errors=$((errors + 1))
+	fi
+
+	# 3. requires_verify=true, failing verifier_result -> MUST still refuse
+	: >"$ledger"
+	ledger_decision "S9-3" 3 "fix" "judgment: fix" true
+	ledger_verifier_result "S9-3" false "not addressed"
+	if ledger_intent_verified "S9-3" 2>/dev/null; then
+		printf '  FAIL S9.3: expected ledger_intent_verified to refuse after a failing verifier_result\n'
+		errors=$((errors + 1))
+	fi
+
+	# 4. already_resolved bypass -> MUST succeed even with no verifier_result
+	: >"$ledger"
+	ledger_decision "S9-4" 4 "fix" "sev4: fix without triage" true
+	ledger_already_resolved "S9-4"
+	if ! ledger_intent_verified "S9-4" 2>/dev/null; then
+		printf '  FAIL S9.4: expected ledger_intent_verified to succeed via already_resolved bypass\n'
+		errors=$((errors + 1))
+	fi
+
+	# 5. requires_verify=false (mechanical sev-3) -> MUST succeed directly
+	: >"$ledger"
+	ledger_decision "S9-5" 3 "fix" "mechanical fix, no triage spawned" false
+	if ! ledger_intent_verified "S9-5" 2>/dev/null; then
+		printf '  FAIL S9.5: expected ledger_intent_verified to succeed when requires_verify=false\n'
+		errors=$((errors + 1))
+	fi
+
+	# 6. ledger_decision with decision="fix" and requires_verify omitted -> MUST error loudly
+	: >"$ledger"
+	if ledger_decision "S9-6" 4 "fix" "missing requires_verify" 2>/dev/null; then
+		printf '  FAIL S9.6: expected ledger_decision to refuse a "fix" decision with no requires_verify arg\n'
+		errors=$((errors + 1))
+	fi
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S9: ledger_intent_verified sequencing guard (6 checks)"
+	else
+		fail "S9: ledger_intent_verified sequencing guard (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# S10: run-review.sh error-event handling + expanded severity mapping.
+# Shadows the real `coderabbit` binary via PATH with a fixture dispatcher
+# (lib/fixtures/run-review/fake-coderabbit.sh), fully offline.
+# ---------------------------------------------------------------------------
+s10() {
+	local run="${LIB}/run-review.sh"
+	local fixtures="${FIXTURES}/run-review"
+	local fakebin="${TMP}/fakebin"
+	mkdir -p "$fakebin"
+	cp "${fixtures}/fake-coderabbit.sh" "${fakebin}/coderabbit"
+	chmod +x "${fakebin}/coderabbit"
+
+	local errors=0 out code
+
+	# 1. Mixed severities: trivial -> 2, info -> 1 (not the sev-3 catch-all)
+	if out=$(FAKE_CODERABBIT_FIXTURE="${fixtures}/mixed-severities.ndjson" PATH="${fakebin}:${PATH}" bash "$run" "main" 2>/dev/null); then
+		local sev_trivial sev_info
+		sev_trivial=$(printf '%s\n' "$out" | jq -c 'select(.file=="a.R") | .severity')
+		sev_info=$(printf '%s\n' "$out" | jq -c 'select(.file=="b.R") | .severity')
+		if [ "$sev_trivial" != "2" ]; then
+			printf '  FAIL S10.1: expected trivial -> severity 2, got %s\n' "$sev_trivial"
+			errors=$((errors + 1))
+		fi
+		if [ "$sev_info" != "1" ]; then
+			printf '  FAIL S10.1: expected info -> severity 1, got %s\n' "$sev_info"
+			errors=$((errors + 1))
+		fi
+	else
+		printf '  FAIL S10.1: expected exit 0 for mixed-severities fixture\n'
+		errors=$((errors + 1))
+	fi
+
+	# 2. An error event -> exit 3, surfaced on stderr, no findings on stdout
+	if out=$(FAKE_CODERABBIT_FIXTURE="${fixtures}/error-event.ndjson" PATH="${fakebin}:${PATH}" bash "$run" "main" 2>"${TMP}/s10-err"); then
+		printf '  FAIL S10.2: expected non-zero exit when an error event is present\n'
+		errors=$((errors + 1))
+	else
+		code=$?
+		if [ "$code" -ne 3 ]; then
+			printf '  FAIL S10.2: expected exit 3 for an error event, got %s\n' "$code"
+			errors=$((errors + 1))
+		fi
+		if [ -n "$out" ]; then
+			printf '  FAIL S10.2: expected no findings on stdout when an error event is present\n'
+			errors=$((errors + 1))
+		fi
+		if ! grep -q '"type":"error"' "${TMP}/s10-err"; then
+			printf '  FAIL S10.2: expected the error event to be surfaced on stderr\n'
+			errors=$((errors + 1))
+		fi
+	fi
+
+	# 3. Clean review (no findings, no errors) -> exit 0, empty stdout
+	if out=$(FAKE_CODERABBIT_FIXTURE="${fixtures}/clean.ndjson" PATH="${fakebin}:${PATH}" bash "$run" "main" 2>/dev/null); then
+		if [ -n "$out" ]; then
+			printf '  FAIL S10.3: expected empty stdout for a clean review\n'
+			errors=$((errors + 1))
+		fi
+	else
+		printf '  FAIL S10.3: expected exit 0 for a clean review\n'
+		errors=$((errors + 1))
+	fi
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S10: run-review.sh error-event handling + expanded severity mapping (3 checks)"
+	else
+		fail "S10: run-review.sh (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
 # Run all
 # ---------------------------------------------------------------------------
 printf '=== anaiis-coderabbit smoke tests ===\n'
@@ -369,6 +605,9 @@ s4
 s5
 s6
 s7
+s8
+s9
+s10
 
 printf '\nResults: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

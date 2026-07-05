@@ -3,7 +3,7 @@ name: anaiis-coderabbit
 description: "CLI-driven CodeRabbit triage in two modes: (1) local pre-PR via coderabbit review --agent; (2) post-PR via gh api against bot comments. Triages by severity, fixes 3-5 with code-surgeon, verifies with two-stage check (tests + intent), commits, and pushes committed fixes with branch safety guards."
 user-invocable: true
 trigger: manual
-version: 0.2.1
+version: 0.2.4
 ---
 
 # anaiis-coderabbit: CLI-Driven CodeRabbit Triage
@@ -72,7 +72,7 @@ Do not pre-load all phase files. Load the active phase file when that phase begi
 | 4 | Triage loop | Skip 1-2, coderabbit-triage for 3, surgeon for 3-5 |
 | 5 | Per-fix verification | Tests via `lib/detect-tests.sh`; then `lib/intent-preflight.sh` + intent-verifier for sev 4-5 and judgment sev-3; revert on any failure |
 | 6 | Commit | Group fixes, stage by name |
-| 7 | Review loop controller | Re-run up to 3 rounds total; exit clean, stalled, or at cap |
+| 7 | Review loop controller | Re-run up to 3 *counted* rounds; a timeout gets one free retry via `lib/review-round.sh` and does not consume a round; exit clean, stalled, at cap, or incomplete |
 
 ### PR mode
 
@@ -93,7 +93,7 @@ Do not pre-load all phase files. Load the active phase file when that phase begi
 - Never push to `main` or `master`.
 - Never force-push (`--force` or `--force-with-lease`).
 - Never auto-chain into `/anaiis-gitrebase`, `/anaiis-changelog`, or `/anaiis-gitpr`.
-- Never run `coderabbit review` more than 3 times per session (Round 1 in Phase 3; Rounds 2-3 in Phase 7).
+- Never count more than 3 review *rounds* per session (Round 1 in Phase 3; Rounds 2-3 in Phase 7). A round only counts when the review actually returns a result; `lib/review-round.sh` gives one free retry on a timeout before a round is counted, so raw `coderabbit review` invocations can exceed 3.
 - Never re-fetch PR comments more than twice per session.
 - Never remove the JSONL run ledger during the session.
 
@@ -103,7 +103,7 @@ Do not pre-load all phase files. Load the active phase file when that phase begi
 bash lib/smoke.sh
 ```
 
-Runs S1-S7: normalizer fixture, ledger idempotency, severity inference table, gh wiring check, agent contract drift, intent-preflight fixture checks (S6), intent-verifier contract (S7). Set `INTENT_JUDGMENT_SMOKE=1` for S7's manual verification scenario.
+Runs S1-S10: normalizer fixture, ledger idempotency, severity inference table, gh wiring check, agent contract drift, intent-preflight fixture checks (S6), intent-verifier contract (S7), review-round.sh timeout+retry (S8), ledger_intent_verified sequencing guard (S9), run-review.sh error-event handling and severity mapping (S10). Set `INTENT_JUDGMENT_SMOKE=1` for S7's manual verification scenario.
 
 ## Integration
 
@@ -112,3 +112,4 @@ Runs S1-S7: normalizer fixture, ledger idempotency, severity inference table, gh
 - `/anaiis-gitpr`: run after changelog to open the PR.
 - `lib/detect-tests.sh`: called during Phase 5 to identify the project test command.
 - `lib/ledger.sh`: shared ledger helpers sourced by phases and lib scripts.
+- `lib/review-round.sh`: called during Phase 3 and Phase 7 to run a review round with a deterministic timeout and one free retry.

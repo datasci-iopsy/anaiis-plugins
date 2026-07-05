@@ -44,7 +44,7 @@ Review scope:
   Type:    <all|committed|uncommitted>
   Dir:     <path or "repo root">
 
-Confirm to proceed? (the review call may take 30-90 seconds)
+Confirm to proceed? (CodeRabbit reviews typically take 7-30+ minutes depending on scope -- see docs.coderabbit.ai/cli/claude-code-integration)
 ```
 
 Wait for user confirmation.
@@ -53,28 +53,47 @@ Wait for user confirmation.
 
 ## Phase 3: Review
 
-Initialize the run ledger and round counter using `lib/ledger.sh`:
+Initialize the run ledger using `lib/ledger.sh`. Do not set `ROUND` yet; a round is only
+counted once it actually produces a result (see below).
 
 ```bash
 source lib/ledger.sh
 BRANCH=$(git branch --show-current)
 ledger_init "$BRANCH" "$BASE" "local"
-ROUND=1
 ```
 
-Run the review via the `lib/run-review.sh` wrapper, which captures and normalizes NDJSON output to the shared finding schema:
+Run Round 1 via `lib/review-round.sh`, which wraps `lib/run-review.sh` with a deterministic
+30-minute timeout (CodeRabbit's documented reviews take 7-30+ minutes) and one free retry on
+a timeout (full contract documented in Phase 7's "Round tracking"):
 
 ```bash
 REVIEW_OUT=~/.claude/anaiis-coderabbit/runs/review-latest.ndjson
 REVIEW_ERR=~/.claude/anaiis-coderabbit/runs/review-latest.err
-bash lib/run-review.sh "$BASE" [--type <type>] [--dir <dir>] > "$REVIEW_OUT" 2> "$REVIEW_ERR"
+bash lib/review-round.sh "$BASE" [--type <type>] [--dir <dir>] > "$REVIEW_OUT" 2> "$REVIEW_ERR"
+EXIT_CODE=$?
 ```
+
+**If `EXIT_CODE` is 0 or 20** (result obtained; 20 means the free retry was used): count
+Round 1:
+```bash
+ROUND=1
+ledger_round_start 1
+```
+If `EXIT_CODE` was 20, also log `ledger_round_timeout 1 recovered`.
 
 Each line of `$REVIEW_OUT` is a finding with fields: `id`, `file`, `line`, `severity` (1-5), `title`, `body`, `suggested_fix` (or null), `source` ("cli").
 
-If the output is empty or contains no findings: report "No findings. Branch is clean against `<base>`." and exit (skip to Phase 7).
+If the output is empty or contains no findings: report "No findings. Branch is clean against `<base>`." and exit. `ROUND` is already 1; there is nothing to re-review, so Phase 7 is not entered.
 
-If the review command fails (non-zero exit): show the tail of the output and stop. Do not proceed to triage.
+**If `EXIT_CODE` is 21** (timeout-exhausted -- both the initial attempt and the free retry timed out): log `ledger_round_timeout 1 exhausted`. No round was counted, and Phase 3 runs before any fix, so nothing has been committed yet. Print:
+```
+Review incomplete: CodeRabbit CLI timed out twice (initial + free retry).
+No fixes attempted this session -- nothing to commit or push.
+Re-run /anaiis-coderabbit to try again.
+```
+Exit non-zero. Do not proceed to triage.
+
+**If `EXIT_CODE` is any other non-zero value:** show the tail of `$REVIEW_ERR` and stop. Do not proceed to triage.
 
 ---
 
@@ -92,17 +111,18 @@ For each finding, in severity order (highest first), apply the rubric:
 
 **Severity 3 (judgment call):**
 - Spawn `Agent(subagent_type="coderabbit-triage", description="Triage CR-<id>: <title>")` with the finding body, file, line, and suggested_fix. The agent returns a single-line JSON verdict: `{"decision": "skip|fix", "rationale": "<one sentence>"}`.
-- Use that verdict for the decision. Log it:
+- Use that verdict for the decision. Log it, marking `requires_verify=true` when the verdict is `fix` (this decision came from `coderabbit-triage`, a judgment call, so Phase 5 must obtain a passing intent-verifier result before it can be marked done):
   ```bash
-  ledger_decision "<id>" 3 "<decision>" "<rationale>"
+  ledger_decision "<id>" 3 "<decision>" "<rationale>" true
   ```
+  A `skip` verdict never reaches Phase 5's verification step, so `requires_verify` is moot for it; omit the 5th arg (`ledger_decision "<id>" 3 "skip" "<rationale>"`).
 - If `fix`: proceed to surgeon spawn below.
 - If `skip`: print `SKIP [<id>] <title> -- <rationale>` and continue to next finding.
 
 **Severity 4-5 (real defect / clear improvement):**
-- Log decision fix immediately, no extra reasoning:
+- Log decision fix immediately, no extra reasoning. `requires_verify=true`: all sev 4-5 fixes need the intent-verifier in Phase 5.
   ```bash
-  ledger_decision "<id>" <n> "fix" "severity <n>: fix without triage"
+  ledger_decision "<id>" <n> "fix" "severity <n>: fix without triage" true
   ```
 - Proceed to surgeon spawn.
 
@@ -156,39 +176,53 @@ if ! preflight_reason=$(bash lib/intent-preflight.sh "<finding.file>" <line_star
     # Print: REVERTED [<id>] <title> -- preflight failed: <preflight_reason>
     # Continue to next finding.
 fi
-ledger_intent_verified "<id>"
 ```
 
 `intent-preflight.sh` checks three things: (1) the surgeon edited the named file (diff non-empty), (2) at least one hunk overlaps the finding's line range within a ±20-line window, and (3) the diff contains at least one non-comment, non-whitespace line. On any failure it exits 1 with a `preflight:<code>` reason on stderr.
 
-On preflight pass, check whether this finding needs intent verification:
+**Preflight pass -- follow this exact order. Do not call `ledger_intent_verified` until the final step.** This sequence exists because logging `intent_verified` before the verifier actually ran is a real failure mode (it happened in practice): `ledger_intent_verified` itself will refuse the call if a required verification hasn't been satisfied yet (see its guard below), but the branches below explain how to reach the final step correctly instead of hitting that refusal.
 
-- **Sev 4-5**, or **sev 3 where the triage decision came from `coderabbit-triage`** (a judgment call, recorded in `$LEDGER` as a `decision` event with source `coderabbit-triage`): spawn the verifier.
-- **Sev 3 with a mechanical `suggested_fix`** (triage decision logged as `"fix"` without spawning `coderabbit-triage`, meaning the fix was mechanical): skip the verifier and emit `ledger_intent_verified "<id>"` directly.
-- **Surgeon returned `Already resolved:`**: emit `ledger_intent_verified "<id>"` directly without preflight or verifier.
-- **Surgeon returned `Blocked:`**: no `verified` event; preserve existing behavior.
+Pick exactly one branch:
 
-**Verifier spawn (sev 4-5 or judgment sev-3):**
+- **(a) Surgeon returned `Already resolved:`**: skip the preflight block above entirely for this outcome. Log `ledger_already_resolved "<id>"`, then go to the final step.
+- **(b) Surgeon returned `Blocked:`**: stop here. No `verified`, `already_resolved`, or `intent_verified` event. Do not proceed further for this finding.
+- **(c) This finding's `decision` event has `requires_verify: false`** (a mechanical sev-3 fix that never spawned `coderabbit-triage`): nothing further required. Go to the final step.
+- **(d) This finding's `decision` event has `requires_verify: true`** (sev 4-5, or sev 3 decided by `coderabbit-triage`): spawn the verifier now -- see "Verifier spawn" below -- before doing anything else.
+
+**Verifier spawn (branch (d) only):**
 
 Spawn an Agent with:
 - `subagent_type`: `intent-verifier`
 - `description`: `Verify intent CR-<id>: <title>`
 - Prompt must include: the finding `body`, `suggested_fix`, and the post-surgeon diff hunk (`git diff HEAD -- <file>`)
 
-The agent returns one line of JSON: `{"intent_met": <true|false>, "rationale": "<one sentence>"}`.
+The agent returns one line of JSON: `{"intent_met": <true|false>, "rationale": "<one sentence>"}`. Log the raw verdict immediately, before acting on it:
 
-- If `intent_met: true`: log `ledger_intent_verified "<id>"`. The finding is ready to commit.
-- If `intent_met: false`: log `ledger_intent_failed "<id>" "<file>" "<rationale>"`, revert `git restore "<file>"`, print `REVERTED [<id>] <title> -- intent failed: <rationale>`, and continue to next finding.
+```bash
+ledger_verifier_result "<id>" <intent_met> "<rationale>"
+```
+
+- If `intent_met: false`: log `ledger_intent_failed "<id>" "<file>" "<rationale>"`, revert `git restore "<file>"`, print `REVERTED [<id>] <title> -- intent failed: <rationale>`, and continue to the next finding. Do not proceed to the final step.
+- If `intent_met: true`: proceed to the final step.
+
+**Final step (reached from branch (a), (c), or a passing verifier in (d) only):**
+
+```bash
+ledger_intent_verified "<id>"
+```
+
+This call is guarded: it refuses (non-zero exit, no event written, stderr message) if `requires_verify: true` for this id and neither an `already_resolved` event nor a passing `verifier_result` (`intent_met: true`) exists yet in `$LEDGER`. A refusal means a branch above was skipped -- stop and re-check the sequence; do not retry the call as-is or assume the finding is verified.
 
 **Rollback path (if verifier proves too aggressive for your codebase):**
 
-If a real run reverts more than ~30% of legitimate fixes, or an adopter reports the 3-round cap hitting on routine work, wrap the verifier spawn in an env-var guard:
+If a real run reverts more than ~30% of legitimate fixes, or an adopter reports the 3-round cap hitting on routine work, wrap the verifier spawn in an env-var guard. The bypass must still satisfy `ledger_intent_verified`'s guard, so it logs a `verifier_result` explaining the bypass rather than calling `ledger_intent_verified` directly:
 
 ```bash
 if [[ "${INTENT_VERIFY:-1}" == "1" ]]; then
-    # ... preflight + verifier spawn ...
+    # ... preflight + verifier spawn (branch (d) above) ...
 else
-    ledger_intent_verified "$id"  # bypass; old behavior
+    ledger_verifier_result "$id" true "bypassed: INTENT_VERIFY=0"
+    ledger_intent_verified "$id"
 fi
 ```
 
@@ -220,35 +254,60 @@ If no findings were successfully verified, report "No commits: all findings were
 
 ## Phase 7: Review loop controller
 
-Phase 7 closes the triage cycle and either exits or continues into the next round. Maximum 3 total review invocations per session (Phase 3 is Round 1; each re-review here increments the counter).
+Phase 7 closes the triage cycle and either exits or continues into the next round. Maximum 3
+**counted** rounds per session (Phase 3 is Round 1; each successful re-review here counts as
+the next round). A round is counted only when the review actually returns a result (findings
+or clean); a timeout that exhausts its free retry does not consume a round-cap slot, so the
+number of raw `coderabbit review` invocations in a session can exceed 3.
 
 ### Round tracking
 
-Initialize `ROUND=1` at the start of Phase 3 (after `ledger_init`). Increment here before each re-review. Log each re-review start:
+`ROUND` was set to 1 in Phase 3 once Round 1 produced a result. Before each re-review,
+compute the candidate round number without committing to it yet:
 
 ```bash
-ROUND=$((ROUND + 1))
-ledger_round_start "$ROUND"
+NEXT_ROUND=$((ROUND + 1))
 ```
+
+Only advance `ROUND` and log `ledger_round_start` once the re-review below actually returns
+a result -- see the outcomes under "Re-review".
 
 ### Re-review
 
 ```bash
-printf '\n[Round %s/3] Running local review against %s...  (30-90s)\n' "$ROUND" "$BASE"
-REVIEW_RECHECK=~/.claude/anaiis-coderabbit/runs/review-recheck-${ROUND}.ndjson
-REVIEW_ERR=~/.claude/anaiis-coderabbit/runs/review-recheck-${ROUND}.err
-timeout 180 bash lib/run-review.sh "$BASE" [--type <type>] [--dir <dir>] \
+printf '\n[Round %s/3] Running local review against %s...  (typically 7-30+ min)\n' "$NEXT_ROUND" "$BASE"
+REVIEW_RECHECK=~/.claude/anaiis-coderabbit/runs/review-recheck-${NEXT_ROUND}.ndjson
+REVIEW_ERR=~/.claude/anaiis-coderabbit/runs/review-recheck-${NEXT_ROUND}.err
+bash lib/review-round.sh "$BASE" [--type <type>] [--dir <dir>] \
     > "$REVIEW_RECHECK" 2> "$REVIEW_ERR"
 EXIT_CODE=$?
 ```
 
-**If `EXIT_CODE` is 124** (timeout): print `[Round N/3] Review timed out after 180s. Stopping.` and exit non-zero.
+`lib/review-round.sh` wraps the review in a 30-minute timeout (`REVIEW_TIMEOUT`, matching
+CodeRabbit's documented 7-30+ minute review times) with one free retry on a timeout
+(exit 124): it exits 0 on immediate success, 20 on success after the free retry, 21 if both
+the initial attempt and the retry timed out, or the review command's own non-zero exit
+otherwise.
 
-**If `EXIT_CODE` is non-zero (other):** print tail of `$REVIEW_ERR` and stop.
+**If `EXIT_CODE` is 0 or 20** (result obtained): commit to this round:
+```bash
+ROUND="$NEXT_ROUND"
+ledger_round_start "$ROUND"
+```
+If `EXIT_CODE` was 20, also log `ledger_round_timeout "$ROUND" recovered` (the free retry was
+used). Continue to "Severity drift check" below with `$REVIEW_RECHECK`.
+
+**If `EXIT_CODE` is 21** (timeout-exhausted -- both the initial attempt and the free retry
+timed out): log `ledger_round_timeout "$NEXT_ROUND" exhausted`. `ROUND` is unchanged; no round
+was consumed. Skip to "Push committed fixes" below, then print the **Review incomplete** exit
+summary and exit. This is neither a round-cap hit nor a stall -- it is an infrastructure
+outage, and a subsequent session may run cleanly.
+
+**If `EXIT_CODE` is any other non-zero value:** print tail of `$REVIEW_ERR` and stop.
 
 ### Severity drift check
 
-After parsing `$REVIEW_RECHECK`, warn on any finding where the severity defaulted to 3 but the body contains no known CodeRabbit tag (`critical`, `major`, `minor`, `nitpick`, `potential issue`, `refactor suggestion`). These are candidates for format drift:
+After parsing `$REVIEW_RECHECK`, warn on any finding where the severity defaulted to 3 but the body contains no known CodeRabbit tag (`critical`, `major`, `minor`, `nitpick`, `trivial`, `info`, `potential issue`, `refactor suggestion`). These are candidates for format drift:
 
 ```
 [Round N/3] Warning: finding <id> has no recognized severity tag. Defaulting to sev-3.
@@ -357,6 +416,25 @@ Open findings:
 Re-run /anaiis-coderabbit in a new session to continue.
 ```
 
+**Review incomplete** (CodeRabbit CLI unreachable: both the initial attempt and the free
+retry timed out):
+```
+[Round N] Review incomplete: CodeRabbit CLI timed out twice (initial + free retry).
+
+CodeRabbit triage incomplete (review unavailable).
+  Rounds run:                       N
+  Fixed and committed:              <total>
+  Skipped (sev 1-2):                <total>
+  Reverted (verify fail):           <total>
+  Reverted (intent fail):           <total>  (<N of M> were sev-3 judgment findings)
+  Committed fixes pushed:           <yes|no>
+
+Branch was NOT verified clean -- the review that would confirm it could not run.
+Re-run /anaiis-coderabbit to finish.
+```
+The header `[Round N]` uses `$NEXT_ROUND` (the round that failed to run); `Rounds run` uses
+`$ROUND` (rounds successfully completed before this one).
+
 Skill exits. It does not auto-chain into the next skill.
 
 ---
@@ -368,7 +446,8 @@ Skill exits. It does not auto-chain into the next skill.
 | Not authenticated | `coderabbit auth login`, then re-run `/anaiis-coderabbit` |
 | On `main` | Create a branch (`git checkout -b coderabbit/<topic>`), then re-run |
 | Review command fails | Show tail of output; check auth or CLI version with `coderabbit --version` |
-| Review times out (code 124) | Network or model latency; wait and re-run |
+| Review times out once (review-round.sh retries automatically) | No action needed -- the free retry is transparent; only visible in the ledger as `round_timeout: recovered` |
+| Review times out twice in a row (review-round.sh exit 21) | Genuine CLI/network outage; any commits made so far had a push attempted (outcome reported per push-failure policy), branch not verified clean; wait and re-run `/anaiis-coderabbit` |
 | Surgeon blocked (callers need attention) | Fix callers manually or in a follow-up commit, then re-run the skill |
 | All findings skipped or reverted | Report and exit cleanly; nothing to commit |
 | Stall after round N | Fix open findings manually; re-run in a new session |
