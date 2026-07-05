@@ -1,0 +1,5 @@
+{"type":"review_context","reviewType":"all","currentBranch":"test","baseBranch":"main","workingDirectory":"/tmp"}
+{"type":"status","phase":"analyzing","status":"reviewing"}
+{"type":"error","message":"failed to analyze file c.R: internal error"}
+{"type":"finding","severity":"minor","fileName":"d.R","codegenInstructions":"Verify.\n\nIn @d.R at line 5, minor issue.","suggestions":[]}
+{"type":"complete","status":"review_failed","findings":1}
