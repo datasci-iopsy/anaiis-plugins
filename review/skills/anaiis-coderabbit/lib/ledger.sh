@@ -109,7 +109,7 @@ _ledger_requires_verify() {
 	local req
 	req=$(jq -rs --arg id "$id" \
 		'[.[] | select(.event=="decision" and .id==$id)] | last | .requires_verify // false' \
-		"$LEDGER" 2>/dev/null)
+		"$LEDGER" 2>/dev/null) || return 0 # jq error: assume verification required (fail safe)
 	[ "$req" = "true" ]
 }
 
