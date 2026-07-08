@@ -3,7 +3,7 @@ name: anaiis-coderabbit
 description: "CLI-driven CodeRabbit triage in two modes: (1) local pre-PR via coderabbit review --agent; (2) post-PR via gh api against bot comments. Triages by severity, fixes 3-5 with code-surgeon, verifies with two-stage check (tests + intent), commits, and pushes committed fixes with branch safety guards."
 user-invocable: true
 trigger: manual
-version: 0.2.4
+version: 0.2.5
 ---
 
 # anaiis-coderabbit: CLI-Driven CodeRabbit Triage
@@ -36,9 +36,10 @@ Examples:
 - `Bash(git:*)` and `Bash(git -C *:*)` for all git operations
 - `Bash(git push origin *:*)` for pushing committed fixes (never to main or master)
 - `Bash(coderabbit:*)` for CLI review and auth (local mode only)
-- `Bash(gh:*)` for PR comment fetch and auth check (PR mode only)
+- `Bash(gh:*)` for PR comment fetch, auth check, and skip-explanation replies (PR mode only)
 - `Bash(jq:*)` for NDJSON parsing
 - `Bash(uv:*)` for running `lib/parse-pr-comments.py`
+- `Bash(bash lib/reply-skip.sh:*)` for posting a skip-explanation reply to a finding's thread (PR mode only)
 - `Bash(uv:*)`, `Bash(Rscript:*)`, `Bash(bun:*)`, `Bash(npm:*)` for test verification
 - `Grep`, `Glob`, `Read` for codebase inspection during triage
 - `Agent(subagent_type="code-surgeon", description="Fix CR-<N>: <summary>")` for surgical fixes
@@ -82,7 +83,7 @@ Do not pre-load all phase files. Load the active phase file when that phase begi
 | 1' | Preflight | Branch check, gh auth check |
 | 2' | Fetch and normalize | `lib/fetch-pr-findings.sh` + `lib/parse-pr-comments.py` |
 | 3' | Idempotency filter | Drop already-handled IDs via `lib/ledger.sh` |
-| 4-6 | (shared) | Same as local mode |
+| 4-6 | (shared) | Same as local mode; PR-mode skips also post a reply to the finding's thread via `lib/reply-skip.sh` |
 | 7' | Exit | Push committed fixes (guarded); print exit summary |
 
 ## Hard limits
@@ -96,6 +97,8 @@ Do not pre-load all phase files. Load the active phase file when that phase begi
 - Never count more than 3 review *rounds* per session (Round 1 in Phase 3; Rounds 2-3 in Phase 7). A round only counts when the review actually returns a result; `lib/review-round.sh` gives one free retry on a timeout before a round is counted, so raw `coderabbit review` invocations can exceed 3.
 - Never re-fetch PR comments more than twice per session.
 - Never remove the JSONL run ledger during the session.
+- In PR mode, `gh api` writes are limited to posting skip-explanation replies via `lib/reply-skip.sh`. Never edit, resolve, or delete existing comments; never reply to `pr-summary` (walkthrough) threads.
+- Post at most one skip reply per finding per session (enforced by the Phase 3' already-handled filter, not by `reply-skip.sh` itself).
 
 ## Verification
 
@@ -103,7 +106,7 @@ Do not pre-load all phase files. Load the active phase file when that phase begi
 bash lib/smoke.sh
 ```
 
-Runs S1-S10: normalizer fixture, ledger idempotency, severity inference table, gh wiring check, agent contract drift, intent-preflight fixture checks (S6), intent-verifier contract (S7), review-round.sh timeout+retry (S8), ledger_intent_verified sequencing guard (S9), run-review.sh error-event handling and severity mapping (S10). Set `INTENT_JUDGMENT_SMOKE=1` for S7's manual verification scenario.
+Runs S1-S11: normalizer fixture, ledger idempotency, severity inference table, gh wiring check, agent contract drift, intent-preflight fixture checks (S6), intent-verifier contract (S7), review-round.sh timeout+retry (S8), ledger_intent_verified sequencing guard (S9), run-review.sh error-event handling and severity mapping (S10), reply-skip.sh source guard and gh POST wiring (S11). Set `INTENT_JUDGMENT_SMOKE=1` for S7's manual verification scenario.
 
 ## Integration
 
@@ -113,3 +116,4 @@ Runs S1-S10: normalizer fixture, ledger idempotency, severity inference table, g
 - `lib/detect-tests.sh`: called during Phase 5 to identify the project test command.
 - `lib/ledger.sh`: shared ledger helpers sourced by phases and lib scripts.
 - `lib/review-round.sh`: called during Phase 3 and Phase 7 to run a review round with a deterministic timeout and one free retry.
+- `lib/reply-skip.sh`: called from Phase 4's skip branches in PR mode to post a skip-explanation reply on the finding's GitHub thread.
