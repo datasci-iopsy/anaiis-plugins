@@ -635,6 +635,111 @@ s10() {
 }
 
 # ---------------------------------------------------------------------------
+# S11: reply-skip.sh source guard, id parse, and gh POST wiring.
+# Fully offline: REPLY_SKIP_GH injects a mock in place of the real gh CLI,
+# mirroring the REVIEW_CMD injection seam used by S8. The mock logs its args
+# to a file so each check can assert exactly what would have been posted.
+# ---------------------------------------------------------------------------
+s11() {
+	local rs="${LIB}/reply-skip.sh"
+	if [ ! -x "$rs" ]; then
+		fail "S11: reply-skip.sh not executable"
+		return
+	fi
+
+	local errors=0 code calls_log
+
+	# 1. Inline source -> posts a reply to the correct thread
+	calls_log="${TMP}/s11-calls-1.log"
+	: >"$calls_log"
+	local mock_ok="${TMP}/mock-gh-ok.sh"
+	cat >"$mock_ok" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >>"$calls_log"
+exit 0
+EOF
+	chmod +x "$mock_ok"
+	if REPLY_SKIP_GH="$mock_ok" bash "$rs" "owner/repo" 5 "PR-5-3540349623" "pr-inline" 2 "nitpick: stylistic only" >/dev/null 2>&1; then
+		if ! grep -q 'repos/owner/repo/pulls/5/comments/3540349623/replies' "$calls_log"; then
+			printf '  FAIL S11.1: expected reply endpoint with comment id 3540349623 in gh call\n'
+			errors=$((errors + 1))
+		fi
+		if ! grep -q -- '--method POST' "$calls_log"; then
+			printf '  FAIL S11.1: expected --method POST in gh call\n'
+			errors=$((errors + 1))
+		fi
+		if ! grep -q 'nitpick: stylistic only' "$calls_log"; then
+			printf '  FAIL S11.1: expected rationale text in posted body\n'
+			errors=$((errors + 1))
+		fi
+	else
+		printf '  FAIL S11.1: expected exit 0 for pr-inline source, got %s\n' "$?"
+		errors=$((errors + 1))
+	fi
+
+	# 2. Summary source -> no-op, gh is never invoked
+	calls_log="${TMP}/s11-calls-2.log"
+	rm -f "$calls_log"
+	if REPLY_SKIP_GH="$mock_ok" bash "$rs" "owner/repo" 5 "PR-5-4910018180" "pr-summary" 2 "walkthrough comment" >/dev/null 2>&1; then
+		printf '  FAIL S11.2: expected exit 10 (no-op) for pr-summary source, got 0\n'
+		errors=$((errors + 1))
+	else
+		code=$?
+		if [ "$code" -ne 10 ]; then
+			printf '  FAIL S11.2: expected exit 10 (no-op) for pr-summary source, got %s\n' "$code"
+			errors=$((errors + 1))
+		fi
+	fi
+	if [ -s "$calls_log" ] || [ -f "$calls_log" ]; then
+		printf '  FAIL S11.2: gh mock was invoked for a pr-summary source; it must never be called\n'
+		errors=$((errors + 1))
+	fi
+
+	# 3. Malformed finding id -> exit 1, reason on stderr
+	local err
+	if err=$(REPLY_SKIP_GH="$mock_ok" bash "$rs" "owner/repo" 5 "not-a-valid-id" "pr-inline" 2 "rationale" 2>&1 1>/dev/null); then
+		printf '  FAIL S11.3: expected exit 1 (bad id), got 0\n'
+		errors=$((errors + 1))
+	else
+		code=$?
+		if [ "$code" -ne 1 ]; then
+			printf '  FAIL S11.3: expected exit 1 (bad id), got %s\n' "$code"
+			errors=$((errors + 1))
+		elif ! printf '%s' "$err" | grep -q 'reply-skip:bad-id'; then
+			printf '  FAIL S11.3: expected stderr reason reply-skip:bad-id\n'
+			errors=$((errors + 1))
+		fi
+	fi
+
+	# 4. gh POST fails -> exit 2, reason on stderr
+	local mock_fail="${TMP}/mock-gh-fail.sh"
+	cat >"$mock_fail" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+	chmod +x "$mock_fail"
+	if err=$(REPLY_SKIP_GH="$mock_fail" bash "$rs" "owner/repo" 5 "PR-5-3540349623" "pr-inline" 2 "rationale" 2>&1 1>/dev/null); then
+		printf '  FAIL S11.4: expected exit 2 (post failed), got 0\n'
+		errors=$((errors + 1))
+	else
+		code=$?
+		if [ "$code" -ne 2 ]; then
+			printf '  FAIL S11.4: expected exit 2 (post failed), got %s\n' "$code"
+			errors=$((errors + 1))
+		elif ! printf '%s' "$err" | grep -q 'reply-skip:post-failed'; then
+			printf '  FAIL S11.4: expected stderr reason reply-skip:post-failed\n'
+			errors=$((errors + 1))
+		fi
+	fi
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S11: reply-skip.sh (inline posts, summary no-op, bad id, gh failure)"
+	else
+		fail "S11: reply-skip.sh (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
 # Run all
 # ---------------------------------------------------------------------------
 printf '=== anaiis-coderabbit smoke tests ===\n'
@@ -648,6 +753,7 @@ s7
 s8
 s9
 s10
+s11
 
 printf '\nResults: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
