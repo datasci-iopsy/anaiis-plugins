@@ -170,7 +170,8 @@ If tests pass (or `none` returned): log `ledger_verified "<id>"` (intermediate: 
 
 ```bash
 preflight_reason=""
-if ! preflight_reason=$(bash lib/intent-preflight.sh "<finding.file>" <line_start> <line_end> 2>&1); then
+if ! preflight_reason=$(INTENT_PREFLIGHT_SUGGESTED_FIX="<finding.suggested_fix>" \
+    bash lib/intent-preflight.sh "<finding.file>" <line_start> <line_end> 2>&1); then
     ledger_intent_failed "<id>" "<finding.file>" "$preflight_reason"
     git restore "<finding.file>"
     # Print: REVERTED [<id>] <title> -- preflight failed: <preflight_reason>
@@ -178,7 +179,7 @@ if ! preflight_reason=$(bash lib/intent-preflight.sh "<finding.file>" <line_star
 fi
 ```
 
-`intent-preflight.sh` checks three things: (1) the surgeon edited the named file (diff non-empty), (2) at least one hunk overlaps the finding's line range within a ±20-line window, and (3) the diff contains at least one non-comment, non-whitespace line. On any failure it exits 1 with a `preflight:<code>` reason on stderr.
+`intent-preflight.sh` checks three things: (1) the surgeon edited the named file (diff non-empty), (2) at least one hunk overlaps the finding's line range within a ±20-line window, and (3) the diff contains at least one non-comment, non-whitespace line -- unless `INTENT_PREFLIGHT_SUGGESTED_FIX` (the finding's own `suggested_fix`) is itself comment-only, in which case a comment-only diff is the expected, correct outcome rather than evidence the surgeon skipped the real fix. On any failure it exits 1 with a `preflight:<code>` reason on stderr.
 
 **Preflight pass -- follow this exact order. Do not call `ledger_intent_verified` until the final step.** This sequence exists because logging `intent_verified` before the verifier actually ran is a real failure mode (it happened in practice): `ledger_intent_verified` itself will refuse the call if a required verification hasn't been satisfied yet (see its guard below), but the branches below explain how to reach the final step correctly instead of hitting that refusal.
 
