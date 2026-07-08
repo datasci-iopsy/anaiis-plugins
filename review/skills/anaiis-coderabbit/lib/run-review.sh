@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Thin wrapper for coderabbit review --agent.
 # Usage: run-review.sh <base> [--type <all|committed|uncommitted>] [--dir <path>]
-# Stdout: raw NDJSON from coderabbit. Exits non-zero on missing deps (1), auth
+# Stdout: normalized NDJSON findings from coderabbit. Exits non-zero on missing deps (1), auth
 # failure (2), a CLI-reported error event (3), or the review command's own
 # non-zero exit (propagated verbatim).
 
