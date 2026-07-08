@@ -108,6 +108,8 @@ For each finding, in severity order (highest first), apply the rubric:
   ledger_skip "<id>" <n> "<rationale>"
   ```
 - Print: `SKIP [<id>] <title> -- <rationale>`
+- In PR mode only, post an explanatory reply to the finding's thread -- see
+  `pr-mode.md` -> "Reply on skip".
 
 **Severity 3 (judgment call):**
 - Spawn `Agent(subagent_type="coderabbit-triage", description="Triage CR-<id>: <title>")` with the finding body, file, line, and suggested_fix. The agent returns a single-line JSON verdict: `{"decision": "skip|fix", "rationale": "<one sentence>"}`.
@@ -117,7 +119,9 @@ For each finding, in severity order (highest first), apply the rubric:
   ```
   A `skip` verdict never reaches Phase 5's verification step, so `requires_verify` is moot for it; omit the 5th arg (`ledger_decision "<id>" 3 "skip" "<rationale>"`).
 - If `fix`: proceed to surgeon spawn below.
-- If `skip`: print `SKIP [<id>] <title> -- <rationale>` and continue to next finding.
+- If `skip`: print `SKIP [<id>] <title> -- <rationale>` and continue to next finding. In PR
+  mode only, post an explanatory reply to the finding's thread -- see `pr-mode.md` -> "Reply
+  on skip".
 
 **Severity 4-5 (real defect / clear improvement):**
 - Log decision fix immediately, no extra reasoning. `requires_verify=true`: all sev 4-5 fixes need the intent-verifier in Phase 5.

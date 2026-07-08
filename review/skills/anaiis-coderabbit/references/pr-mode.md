@@ -105,6 +105,37 @@ Replace `$REVIEW_OUT` reference with `$NEW_OUT` for all subsequent phases.
 
 ---
 
+## Reply on skip (PR mode)
+
+Phase 4's two skip branches (severity 1-2 auto-skip and severity-3 judgment skip, both in
+`phases.md`) call this step in PR mode only, immediately after `ledger_skip` is logged. All
+skips get a reply, regardless of severity; local mode has no GitHub thread and never calls this.
+
+```bash
+bash lib/reply-skip.sh "$REPO" "$PR_NUM" "<id>" "<source>" <severity> "<rationale>"
+case $? in
+    0)  printf '  reply posted to CodeRabbit thread\n' ;;
+    10) printf '  no inline thread (summary finding); no reply\n' ;;
+    2)  printf '  WARNING: skip logged but reply could not be posted for %s -- review the PR thread manually\n' "<id>" ;;
+    1)  printf '  WARNING: reply-skip.sh usage error for %s\n' "<id>" ;;
+esac
+```
+
+`REPO` and `PR_NUM` were exported in Phase 0. `<source>` and `<severity>` come from the
+finding being triaged; `<rationale>` is the same skip rationale just logged via `ledger_skip`.
+
+`lib/reply-skip.sh` no-ops (exit 10) for `pr-summary` findings, since the auto-generated
+walkthrough comment has no real review-comment thread to reply into -- only `pr-inline`
+findings get a posted reply.
+
+A reply failure (exit 1 or 2) is non-fatal: print the warning and continue triaging the next
+finding. The skip is already recorded in the local ledger regardless of whether the reply
+posts, so no audit information is lost; only the GitHub-visible explanation is missing, and
+the warning tells the user to check manually. Re-runs never double-post: `ledger_skip` is
+terminal, so Phase 3's idempotency filter drops the finding before Phase 4 sees it again.
+
+---
+
 ## Phase 7': Exit (PR mode)
 
 After Phase 6 (commit), push committed fixes so the CodeRabbit bot can see them on the next review pass. Do not re-run `coderabbit review`.
