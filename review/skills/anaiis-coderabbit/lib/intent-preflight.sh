@@ -5,6 +5,11 @@
 #
 # For smoke testing, set INTENT_PREFLIGHT_DIFF=<path> to read diff content from
 # a fixture file instead of running git. Production use leaves this unset.
+#
+# Set INTENT_PREFLIGHT_SUGGESTED_FIX=<text> to the finding's suggested_fix
+# content. If it is itself comment-only, a comment-only diff no longer fails
+# check 3 -- the finding was about a comment being wrong, so fixing only the
+# comment is the correct outcome, not evidence the surgeon skipped the fix.
 
 set -euo pipefail
 
@@ -55,22 +60,42 @@ if [[ "$overlaps" -eq 0 ]]; then
 	exit 1
 fi
 
-# Check 3: at least one changed line is not a comment or blank.
+# Check 3: at least one changed line is not a comment or blank -- unless the
+# finding's own suggested_fix is itself comment-only (see header).
 # Comment markers: # (R/Python/Shell), // (JS/TS/C++), -- (SQL), /* or * (C-style block).
+is_comment_or_blank() {
+	[[ "$1" =~ ^[[:space:]]*(#|//|--|\/\*|\*)[[:space:]] ]] || [[ "$1" =~ ^[[:space:]]*$ ]]
+}
+
+suggested_fix_is_comment_only=0
+if [[ -n "${INTENT_PREFLIGHT_SUGGESTED_FIX:-}" ]]; then
+	suggested_fix_all_comments=1
+	suggested_fix_has_content=0
+	while IFS= read -r sline; do
+		if ! is_comment_or_blank "$sline"; then
+			suggested_fix_all_comments=0
+			break
+		fi
+		[[ -n "${sline// /}" ]] && suggested_fix_has_content=1
+	done <<<"$INTENT_PREFLIGHT_SUGGESTED_FIX"
+	if [[ "$suggested_fix_all_comments" -eq 1 && "$suggested_fix_has_content" -eq 1 ]]; then
+		suggested_fix_is_comment_only=1
+	fi
+fi
+
 has_real_change=0
 while IFS= read -r line; do
 	# Only inspect added/removed lines, not context or file-header lines.
 	if [[ "$line" =~ ^[+-] ]] && ! [[ "$line" =~ ^(---|\+\+\+) ]]; then
 		content="${line:1}"
-		if ! [[ "$content" =~ ^[[:space:]]*(#|//|--|\/\*|\*)[[:space:]] ]] \
-			&& ! [[ "$content" =~ ^[[:space:]]*$ ]]; then
+		if ! is_comment_or_blank "$content"; then
 			has_real_change=1
 			break
 		fi
 	fi
 done <<<"$diff_content"
 
-if [[ "$has_real_change" -eq 0 ]]; then
+if [[ "$has_real_change" -eq 0 ]] && [[ "$suggested_fix_is_comment_only" -eq 0 ]]; then
 	printf 'preflight:comment-only\n' >&2
 	exit 1
 fi

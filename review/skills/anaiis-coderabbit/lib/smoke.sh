@@ -283,8 +283,48 @@ s6() {
 		errors=$((errors + 1))
 	fi
 
+	# 5. Comment-only diff, no suggested-fix context -> FAIL preflight:comment-only (unchanged regression guard)
+	if reason=$(INTENT_PREFLIGHT_DIFF="${fixtures}/comment-only-fix.diff" \
+		bash "$preflight" "R/analysis.R" 10 12 2>&1); then
+		printf '  FAIL S6.5: comment-only-fix with no suggested-fix context should fail preflight\n'
+		errors=$((errors + 1))
+	elif [ "$reason" != "preflight:comment-only" ]; then
+		printf '  FAIL S6.5: wrong reason (got %s, want preflight:comment-only)\n' "$reason"
+		errors=$((errors + 1))
+	fi
+
+	# 6. Comment-only diff, suggested fix is ALSO comment-only -> PASS (the finding was about a comment)
+	if ! INTENT_PREFLIGHT_DIFF="${fixtures}/comment-only-fix.diff" \
+		INTENT_PREFLIGHT_SUGGESTED_FIX=$'# compute the mean, ignoring missing values' \
+		bash "$preflight" "R/analysis.R" 10 12 >/dev/null 2>&1; then
+		printf '  FAIL S6.6: comment-only-fix should pass when suggested_fix is itself comment-only\n'
+		errors=$((errors + 1))
+	fi
+
+	# 7. Comment-only diff, but suggested fix is real code -> still FAIL (surgeon's diff doesn't match what was expected)
+	if reason=$(INTENT_PREFLIGHT_DIFF="${fixtures}/comment-only-fix.diff" \
+		INTENT_PREFLIGHT_SUGGESTED_FIX='mean(items, na.rm = TRUE)' \
+		bash "$preflight" "R/analysis.R" 10 12 2>&1); then
+		printf '  FAIL S6.7: comment-only-fix should still fail when suggested_fix is real code\n'
+		errors=$((errors + 1))
+	elif [ "$reason" != "preflight:comment-only" ]; then
+		printf '  FAIL S6.7: wrong reason (got %s, want preflight:comment-only)\n' "$reason"
+		errors=$((errors + 1))
+	fi
+
+	# 8. Comment-only diff, empty suggested-fix env var -> still FAIL (guard against trivial bypass)
+	if reason=$(INTENT_PREFLIGHT_DIFF="${fixtures}/comment-only-fix.diff" \
+		INTENT_PREFLIGHT_SUGGESTED_FIX='' \
+		bash "$preflight" "R/analysis.R" 10 12 2>&1); then
+		printf '  FAIL S6.8: comment-only-fix should still fail with an empty suggested-fix env var\n'
+		errors=$((errors + 1))
+	elif [ "$reason" != "preflight:comment-only" ]; then
+		printf '  FAIL S6.8: wrong reason (got %s, want preflight:comment-only)\n' "$reason"
+		errors=$((errors + 1))
+	fi
+
 	if [ "$errors" -eq 0 ]; then
-		pass "S6: intent-preflight (4 fixture checks: 2 pass, 2 fail-with-reason)"
+		pass "S6: intent-preflight (8 fixture checks: 3 pass, 5 fail-with-reason)"
 	else
 		fail "S6: intent-preflight (${errors} checks failed)"
 	fi
