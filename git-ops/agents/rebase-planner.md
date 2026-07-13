@@ -31,6 +31,7 @@ Refine the draft into final groups, applying:
 4. Documentation changes (README, CLAUDE.md) form their own group unless tightly coupled to a specific feature already grouped above.
 5. A file touched by more than one commit: place it in exactly one group, the one matching its final logical purpose. Do not split one file's changes across multiple groups.
 6. Binary files and submodule changes: never place them in a group. List their paths in `flagged` instead.
+7. A commit whose files are all flagged still needs exactly one group: assign its SHA to the group matching its own conventional-commit prefix in `draft-groups.json` if one exists, otherwise place it alone in a new dedicated group (e.g. `"message": "chore: track binary/submodule updates"`, `"files": []`).
 
 Every file that appears anywhere in `commits.json` must end up in exactly one place: one group's `files`, or `flagged`. None may be silently dropped.
 
