@@ -376,8 +376,8 @@ s7() {
 	local errors=0
 
 	# Frontmatter: correct model tier for a judgment task
-	if ! grep -q 'model: claude-sonnet-4-6' "$verifier"; then
-		printf '  FAIL S7.1: intent-verifier.md missing model: claude-sonnet-4-6\n'
+	if ! grep -q 'model: claude-sonnet-5' "$verifier"; then
+		printf '  FAIL S7.1: intent-verifier.md missing model: claude-sonnet-5\n'
 		errors=$((errors + 1))
 	fi
 
