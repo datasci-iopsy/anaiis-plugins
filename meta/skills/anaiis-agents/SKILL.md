@@ -129,6 +129,6 @@ This skill provides the orchestration layer. Domain skills provide the expertise
 |---|---|
 | File/data analysis (parquet, CSV, avro, JSON, SQLite) | anaiis-duckdb |
 | Literature and document research | anaiis-litreview |
-| Environment health checks | anaiis-preflight (run inline, not in an agent) |
+| Git-state checks before a git-ops operation | git-ops's `lib/preflight.sh` (run inline as phase 0 of rebase/changelog/pr/finish, not a separate skill or agent) |
 
-**anaiis-preflight** is always run inline before spawning agents. Do not waste an agent on it.
+**Git-state preflight checks** run inline as phase 0 of each git-ops skill. Do not waste an agent on them.

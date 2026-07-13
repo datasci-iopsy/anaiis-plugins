@@ -66,7 +66,7 @@ when a trigger condition is met (see below).
 | Layout | One `SKILL.md`, prose only | `SKILL.md` + `references/`, `lib/`, optional `agents/` |
 | When to use | Procedural workflow, no scripts, no deterministic logic to test | Scripts, deterministic transforms, multi-phase flow, or shared logic |
 | Tests | None | `lib/smoke.sh` with fixture-based checks |
-| Working example | `changelog`, `anaiis-copyedit`, `anaiis-preflight` | `anaiis-coderabbit` |
+| Working example | `changelog`, `anaiis-copyedit` | `anaiis-coderabbit` |
 
 ### Decision tree: when to promote flat to expanded
 

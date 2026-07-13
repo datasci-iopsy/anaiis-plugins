@@ -57,4 +57,3 @@ Load `references/phases.md` when a phase begins.
 ## Integration
 
 - `/anaiis-git-ops:changelog`: after rebase, run to generate a PR description from the clean commit history.
-- `anaiis-preflight`: not needed; this skill's phase 0 does its own git-state preflight.
