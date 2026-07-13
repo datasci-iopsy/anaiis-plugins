@@ -1,3 +1,6 @@
+# Session planning artifacts (overwritten per task, not versioned)
+tasks/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
