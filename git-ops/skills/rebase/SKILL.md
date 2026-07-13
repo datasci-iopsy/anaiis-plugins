@@ -3,62 +3,58 @@ name: rebase
 description: "Explicit /anaiis-git-ops:rebase, rebase commits into logical groups before PR review"
 user-invocable: true
 trigger: manual
-version: 0.1.0
+version: 0.2.0
 ---
 
 # Git Rebase (Branch Reconstruction)
 
-Reorganize commits on a feature branch into clean, logically grouped commits for PR review. Uses branch reconstruction instead of `git rebase -i` -- avoids the interactive editor entirely. Claude never force-pushes; the final step hands the user the exact command to run.
+Script-driven branch reconstruction: bash owns every deterministic step, the
+rebase-planner agent only refines the commit grouping. Never `git rebase -i`.
+Claude never force-pushes; the final phase hands the user the exact command.
 
 ## Scope
 
 ```
-$ARGUMENTS: [branch] [base] [--dry-run]
+$ARGUMENTS: [branch] [base] [--dry-run] [--confirm]
 ```
 
 - `branch`: feature branch to rebase (default: current branch)
 - `base`: base ref to rebase onto (default: `main`)
-- `--dry-run`: run phases 1 and 2 only; output proposed grouping without executing
+- `--dry-run`: phases 0-3 only; print the plan, do not execute
+- `--confirm`: pause for explicit approval after phase 3, before any destructive work
 
 Examples:
 - `/anaiis-git-ops:rebase`
 - `/anaiis-git-ops:rebase feature/my-branch main`
 - `/anaiis-git-ops:rebase --dry-run`
 
-## Tool usage
+## Lib resolution
 
-- `Bash(git:*)` for all git operations (pre-approved, no permission overhead)
-- `Grep`/`Glob` only when file purpose is ambiguous from its path alone
-- Never use `Read` to examine file contents for grouping decisions; `--stat` and `--name-only` output is sufficient
-
-**Working directory:** All git commands must start with `git`. If the current shell cwd is not the repo root, use `git -C <absolute-repo-root> <subcommand>` -- never `cd <path> && git <subcommand>`.
+Shared `lib/` is plugin-level, not skill-local: resolve it from this skill's own base
+directory (shown in your invocation context) via `<base>/../../lib/<script>.sh`.
 
 ## Phase overview
 
 Load `references/phases.md` when a phase begins.
 
-| Phase | Name | Gate |
-|---|---|---|
-| 1 | Preflight | Clean tree, no merges, named branch |
-| 2 | Analysis | Propose commit groupings |
-| GATE 1 | User confirms grouping | Must get explicit approval |
-| 3 | Execute | Build temp branch with clean commits |
-| 4 | Verify | Empty diff confirms tree equality |
-| GATE 2 | User confirms verification | Must get explicit approval |
-| 5 | Swap | Reset original branch to temp |
-| 6 | Hand off | Surface push command; Claude does not push |
+| Phase | Actor | Action | Stop condition |
+|---|---|---|---|
+| 0 | `lib/preflight.sh` | clean tree, named non-main branch, no merges, upstream state | any check fails |
+| 1 | `lib/git-state.sh` | run dir + commits.json, diffstat, diff.patch | no commits in range |
+| 2 | `lib/group-commits.sh` | draft-groups.json from conventional prefixes | never |
+| 3 | `rebase-planner` agent | plan.json (max 10 groups), print the plan | `--dry-run` ends here; `--confirm` waits; flagged binaries/submodules wait |
+| 4-5 | `lib/apply-plan.sh` | safety tag, tmp branch, per-group commit, tree-equality verify, swap | hook failure or non-empty diff (tag + tmp preserved, recovery printed) |
+| 6 | main thread | print log + push handoff (plain push, or force-with-lease text if upstream exists) | n/a |
 
 ## Hard limits
 
 - Never execute `git push --force`, `git push --force-with-lease`, or any force-push variant. Human-only action.
-- Never proceed past Phase 4 if the tree diff is non-empty.
-- Never start without a clean working tree.
-- Never operate on a range that includes merge commits.
-- Never delete the safety tag -- the user deletes it when satisfied.
+- Never proceed past phase 4-5 if `lib/apply-plan.sh` exits non-zero; report its recovery command verbatim.
 - Never use `git rebase -i`.
-- Maximum 10 logical commit groups. If more are needed, suggest splitting the PR.
+- Never delete the safety tag -- the user deletes it when satisfied.
+- Maximum 10 logical commit groups (enforced by the planner agent).
 
 ## Integration
 
 - `/anaiis-git-ops:changelog`: after rebase, run to generate a PR description from the clean commit history.
-- `anaiis-preflight`: not needed; this skill does its own git-state preflight in Phase 1.
+- `anaiis-preflight`: not needed; this skill's phase 0 does its own git-state preflight.
