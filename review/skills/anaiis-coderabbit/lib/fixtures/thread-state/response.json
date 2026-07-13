@@ -1,0 +1,78 @@
+{
+    "data": {
+        "repository": {
+            "pullRequest": {
+                "reviewThreads": {
+                    "pageInfo": {
+                        "hasNextPage": false,
+                        "endCursor": "cursor-end"
+                    },
+                    "nodes": [
+                        {
+                            "isResolved": true,
+                            "isOutdated": false,
+                            "comments": {
+                                "nodes": [
+                                    {
+                                        "databaseId": 1001,
+                                        "author": {
+                                            "login": "coderabbitai"
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "isResolved": false,
+                            "isOutdated": false,
+                            "comments": {
+                                "nodes": [
+                                    {
+                                        "databaseId": 1002,
+                                        "author": {
+                                            "login": "coderabbitai"
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "isResolved": false,
+                            "isOutdated": true,
+                            "comments": {
+                                "nodes": [
+                                    {
+                                        "databaseId": 1003,
+                                        "author": {
+                                            "login": "coderabbitai"
+                                        }
+                                    },
+                                    {
+                                        "databaseId": 1004,
+                                        "author": {
+                                            "login": "coderabbitai"
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "isResolved": false,
+                            "isOutdated": false,
+                            "comments": {
+                                "nodes": [
+                                    {
+                                        "databaseId": 9001,
+                                        "author": {
+                                            "login": "someuser"
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+    }
+}

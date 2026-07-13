@@ -74,6 +74,13 @@ If `$REVIEW_OUT` is empty or has zero lines: report "No CodeRabbit comments foun
 
 ## Phase 3': Idempotency filter
 
+Two filter stages. Stage 1 drops findings this skill already handled (local ledger); stage 2
+drops findings a human already handled on GitHub (thread resolution state). The ledger is the
+source of truth for what the skill did; GitHub thread state is the source of truth for what
+humans did.
+
+### Stage 1: Ledger filter
+
 Load handled IDs from prior ledgers for this PR:
 
 ```bash
@@ -93,15 +100,54 @@ while IFS= read -r line; do
 done < "$REVIEW_OUT" > "$NEW_OUT"
 ```
 
-Count and report:
+### Stage 2: Thread-resolution filter
+
+Fetch thread state (GraphQL; REST does not expose it). This filter fails open: on any
+fetch failure, warn loudly and continue with ledger-only filtering, degrading to stage-1
+behavior only.
+
+```bash
+THREAD_STATE="${FETCH_OUT}/thread-state.json"
+ts_code=0
+bash lib/fetch-thread-state.sh "$REPO" "$PR_NUM" "$THREAD_STATE" || ts_code=$?
+if [ "$ts_code" -ne 0 ]; then
+    printf 'WARNING: thread-state fetch failed (exit %s); continuing with ledger-only filtering.\n' "$ts_code"
+    printf 'Findings resolved manually on GitHub may be re-triaged this run.\n'
+    printf '[]' > "$THREAD_STATE"
+fi
+```
+
+Drop findings whose comment sits in a resolved or outdated thread:
+
+```bash
+FINAL_OUT=~/.claude/anaiis-coderabbit/runs/review-active.ndjson
+while IFS= read -r line; do
+    id=$(printf '%s' "$line" | jq -r '.id')
+    cid="${id##*-}"
+    if jq -e --argjson cid "$cid" \
+        'any(.[]; .comment_id == $cid and (.is_resolved or .is_outdated))' \
+        "$THREAD_STATE" >/dev/null; then
+        continue
+    fi
+    printf '%s\n' "$line"
+done < "$NEW_OUT" > "$FINAL_OUT"
+```
+
+`pr-summary` findings never appear in review threads, so they pass through unaffected.
+Findings dropped here get no ledger event and no reply: nothing was decided by this skill,
+and the thread already carries its own resolution. This is deliberate; a user can un-resolve
+a thread in the GitHub UI to force it back into triage on the next run.
+
+### Count and report
 
 ```
-PR #<N>: <total> findings total, <handled> already handled, <new> new.
+PR #<N>: <total> findings total, <handled> already handled (ledger),
+<resolved> resolved/outdated on GitHub, <new> new.
 ```
 
 If `<new>` is 0: print "All findings already addressed. Nothing to do." and exit cleanly.
 
-Replace `$REVIEW_OUT` reference with `$NEW_OUT` for all subsequent phases.
+Replace `$REVIEW_OUT` reference with `$FINAL_OUT` for all subsequent phases.
 
 ---
 
@@ -193,5 +239,6 @@ Do not open or modify the PR. Exit.
 | PR branch mismatch | `git checkout <headRefName>`, then re-run |
 | No bot comments yet | Wait for CodeRabbit CI to finish, then re-run |
 | parse-pr-comments.py fails | Check `uv` is available; run `uv run lib/parse-pr-comments.py --help` |
+| fetch-thread-state.sh fails | Non-fatal: Phase 3' warns and falls back to ledger-only filtering; findings resolved manually on GitHub may be re-triaged that run |
 | All findings already handled | Nothing to do; push runs automatically at exit |
 | Push fails | Commits remain local; run `git push origin <branch>` manually |
