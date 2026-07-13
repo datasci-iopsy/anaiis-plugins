@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# git-ops apply-plan: execute a rebase-planner plan.json as branch reconstruction.
+# Never uses `git rebase -i`; never force-pushes; never pushes at all.
+# Usage: apply-plan.sh <run_dir>
+# Reads <run_dir>/run.json (branch, fork_sha, head_sha) and <run_dir>/plan.json
+# ({groups:[{message, commits[], files[]}], flagged[], rationale}).
+# Prints one JSON line on success: {ok, branch, groups_committed, safety_tag}
+#
+# Exit codes:
+#   0  reconstruction complete, tree verified equal, branch swapped
+#  30  safety tag already exists (abort before any destructive action)
+#  31  tmp branch already exists (abort before any destructive action)
+#  32  pre-commit hook failed during a group commit (tag + tmp preserved)
+#  33  non-empty diff after reconstruction (tag + tmp preserved)
+set -euo pipefail
+
+RUN_DIR="$1"
+RUN_JSON="${RUN_DIR}/run.json"
+PLAN_JSON="${RUN_DIR}/plan.json"
+
+branch=$(jq -r '.branch' "$RUN_JSON")
+fork_sha=$(jq -r '.fork_sha' "$RUN_JSON")
+head_sha=$(jq -r '.head_sha' "$RUN_JSON")
+
+safety_tag="safety/pre-rebase-${branch}"
+tmp_branch="tmp/rebase-${branch}"
+
+if git rev-parse -q --verify "refs/tags/${safety_tag}" >/dev/null; then
+	printf 'ERROR: safety tag %s already exists; resolve or delete it before retrying\n' "$safety_tag" >&2
+	exit 30
+fi
+if git rev-parse -q --verify "refs/heads/${tmp_branch}" >/dev/null; then
+	printf 'ERROR: tmp branch %s already exists; resolve or delete it before retrying\n' "$tmp_branch" >&2
+	exit 31
+fi
+
+git tag "$safety_tag" "$head_sha"
+git checkout -q -b "$tmp_branch" "$fork_sha"
+
+groups_committed=0
+group_count=$(jq '.groups | length' "$PLAN_JSON")
+for i in $(seq 0 $((group_count - 1))); do
+	message=$(jq -r ".groups[$i].message" "$PLAN_JSON")
+	files=$(jq -r ".groups[$i].files[]" "$PLAN_JSON")
+	while IFS= read -r file; do
+		[ -z "$file" ] && continue
+		if git cat-file -e "${head_sha}:${file}" 2>/dev/null; then
+			git checkout -q "$head_sha" -- "$file"
+		else
+			git rm -q --ignore-unmatch -- "$file" >/dev/null
+		fi
+	done <<<"$files"
+
+	if git diff --cached --quiet; then
+		continue # nothing staged for this group (files already matched fork state)
+	fi
+
+	hook_output=$(git commit -q -m "$message" 2>&1) || {
+		printf 'ERROR: pre-commit hook failed for group %d ("%s")\n' "$((i + 1))" "$message" >&2
+		printf '%s\n' "$hook_output" >&2
+		printf 'Safety tag %s and tmp branch %s preserved.\n' "$safety_tag" "$tmp_branch" >&2
+		printf 'Recovery: git checkout %s && git reset --hard %s && git branch -D %s\n' "$branch" "$safety_tag" "$tmp_branch" >&2
+		exit 32
+	}
+	groups_committed=$((groups_committed + 1))
+done
+
+tree_diff=$(git diff "$head_sha" "$tmp_branch")
+if [ -n "$tree_diff" ]; then
+	printf 'ERROR: tree verification failed; reconstructed tree differs from %s\n' "$head_sha" >&2
+	printf '%s\n' "$tree_diff" >&2
+	printf 'Safety tag %s and tmp branch %s preserved.\n' "$safety_tag" "$tmp_branch" >&2
+	printf 'Recovery: git checkout %s && git reset --hard %s && git branch -D %s\n' "$branch" "$safety_tag" "$tmp_branch" >&2
+	exit 33
+fi
+
+git checkout -q "$branch"
+git reset -q --hard "$tmp_branch"
+git branch -q -d "$tmp_branch"
+
+jq -nc --arg branch "$branch" --argjson n "$groups_committed" --arg tag "$safety_tag" \
+	'{ok: true, branch: $branch, groups_committed: $n, safety_tag: $tag}'
