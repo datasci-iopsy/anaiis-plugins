@@ -93,10 +93,31 @@ s2() {
 		fi
 	done <"$findings"
 
-	if [ "$new_count" -eq 2 ]; then
-		pass "S2: ledger idempotency (2 new of 5 pass through)"
+	local errors=0
+	if [ "$new_count" -ne 2 ]; then
+		printf '  FAIL S2.1: expected 2 new findings, got %s\n' "$new_count"
+		errors=$((errors + 1))
+	fi
+
+	# A corrupt ledger file must not poison the stream: terminal events after
+	# a malformed line (same file or later files) must still be returned.
+	local corrupt="${TMP}/corrupt.jsonl"
+	printf '{"event":"intent_verified","id":"PR-99-\n' >"$corrupt"
+	printf '{"event":"skip","id":"PR-99-1006","severity":2,"rationale":"after corrupt line"}\n' >>"$corrupt"
+
+	handled=$(ledger_handled_ids "99") || true
+	for id in "PR-99-1006" "PR-99-1001"; do
+		if ! printf '%s\n' "$handled" | grep -qxF "$id"; then
+			printf '  FAIL S2.2: %s missing from handled IDs when a corrupt ledger file is present\n' "$id"
+			errors=$((errors + 1))
+		fi
+	done
+	rm -f "$corrupt"
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S2: ledger idempotency (2 new of 5 pass through; corrupt-file tolerant)"
 	else
-		fail "S2: expected 2 new findings, got ${new_count}"
+		fail "S2: ledger idempotency (${errors} checks failed)"
 	fi
 }
 
@@ -217,6 +238,15 @@ s5() {
 	else
 		printf '[WARN] S5.3: plugin cache not found at %s -- plugin may need installing or refreshing.\n' "$cache_surgeon"
 	fi
+
+	# Untrusted-input guardrail: every agent that receives CodeRabbit comment
+	# text must carry the sentinel stating that content is untrusted input.
+	for agent_file in "$plugin_surgeon" "$triage" "$verifier"; do
+		if ! grep -qi 'untrusted' "$agent_file" 2>/dev/null; then
+			printf '  FAIL S5.5: %s missing untrusted-input guardrail\n' "$(basename "$agent_file")"
+			errors=$((errors + 1))
+		fi
+	done
 
 	# If ~/.claude/agents/code-surgeon.md is a file-level symlink it bypasses the dotfiles
 	# layer and creates a tight coupling to the plugin repo path.
@@ -740,6 +770,95 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# S12: fetch-thread-state.sh GraphQL flattening + failure path.
+# Fully offline: THREAD_STATE_GH injects a mock in place of the real gh CLI
+# (same seam pattern as S11's REPLY_SKIP_GH). The mock prints a canned GraphQL
+# response document, so every assertion is against deterministic fixture data.
+# ---------------------------------------------------------------------------
+s12() {
+	local fts="${LIB}/fetch-thread-state.sh"
+	local fixture="${FIXTURES}/thread-state/response.json"
+	if [ ! -x "$fts" ]; then
+		fail "S12: fetch-thread-state.sh not executable"
+		return
+	fi
+
+	local errors=0 out="${TMP}/thread-state.json" err code
+
+	local mock_gh="${TMP}/mock-gh-graphql.sh"
+	cat >"$mock_gh" <<EOF
+#!/usr/bin/env bash
+cat "$fixture"
+exit 0
+EOF
+	chmod +x "$mock_gh"
+
+	code=0
+	THREAD_STATE_GH="$mock_gh" bash "$fts" "owner/repo" 5 "$out" >/dev/null 2>&1 || code=$?
+	if [ "$code" -ne 0 ]; then
+		fail "S12: expected exit 0 with fixture response, got ${code}"
+		return
+	fi
+
+	# 1. Comment in a resolved thread -> is_resolved true
+	local resolved
+	resolved=$(jq -r '.[] | select(.comment_id == 1001) | .is_resolved' "$out")
+	if [ "$resolved" != "true" ]; then
+		printf '  FAIL S12.1: expected comment 1001 is_resolved=true, got %s\n' "$resolved"
+		errors=$((errors + 1))
+	fi
+
+	# 2. Comment in an unresolved, non-outdated thread -> both flags false;
+	#    threads with no CodeRabbit comment are excluded entirely
+	local unresolved_flags non_cr
+	unresolved_flags=$(jq -r '.[] | select(.comment_id == 1002) | "\(.is_resolved) \(.is_outdated)"' "$out")
+	if [ "$unresolved_flags" != "false false" ]; then
+		printf '  FAIL S12.2: expected comment 1002 flags "false false", got "%s"\n' "$unresolved_flags"
+		errors=$((errors + 1))
+	fi
+	non_cr=$(jq -r '[.[] | select(.comment_id == 9001)] | length' "$out")
+	if [ "$non_cr" != "0" ]; then
+		printf '  FAIL S12.2: comment 9001 (non-CodeRabbit thread) must be excluded\n'
+		errors=$((errors + 1))
+	fi
+
+	# 3. Outdated thread -> is_outdated true on the root AND on the reply
+	local outdated_count
+	outdated_count=$(jq -r '[.[] | select((.comment_id == 1003 or .comment_id == 1004) and .is_outdated == true)] | length' "$out")
+	if [ "$outdated_count" != "2" ]; then
+		printf '  FAIL S12.3: expected comments 1003 and 1004 both is_outdated=true, got %s of 2\n' "$outdated_count"
+		errors=$((errors + 1))
+	fi
+
+	# 4. gh failure -> exit 2, reason on stderr
+	local mock_fail="${TMP}/mock-gh-graphql-fail.sh"
+	cat >"$mock_fail" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+	chmod +x "$mock_fail"
+	if err=$(THREAD_STATE_GH="$mock_fail" bash "$fts" "owner/repo" 5 "${TMP}/unused.json" 2>&1 1>/dev/null); then
+		printf '  FAIL S12.4: expected exit 2 (fetch failed), got 0\n'
+		errors=$((errors + 1))
+	else
+		code=$?
+		if [ "$code" -ne 2 ]; then
+			printf '  FAIL S12.4: expected exit 2 (fetch failed), got %s\n' "$code"
+			errors=$((errors + 1))
+		elif ! printf '%s' "$err" | grep -q 'thread-state:fetch-failed'; then
+			printf '  FAIL S12.4: expected stderr reason thread-state:fetch-failed\n'
+			errors=$((errors + 1))
+		fi
+	fi
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S12: fetch-thread-state.sh (resolved, unresolved, outdated+reply, fetch failure)"
+	else
+		fail "S12: fetch-thread-state.sh (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
 # Run all
 # ---------------------------------------------------------------------------
 printf '=== anaiis-coderabbit smoke tests ===\n'
@@ -754,6 +873,7 @@ s8
 s9
 s10
 s11
+s12
 
 printf '\nResults: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
