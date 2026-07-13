@@ -9,7 +9,7 @@ git housekeeping.
 | Plugin | Skills |
 |---|---|
 | **anaiis-review** | CodeRabbit triage, document audit, manuscript peer review, skill review |
-| **anaiis-git** | PR creation, commit rebase, changelog generation, environment preflight |
+| **anaiis-git-ops** | PR creation, commit rebase, changelog generation, environment preflight |
 | **anaiis-data** | DuckDB ad hoc queries, dashboards, terminal charts, web verification, knowledge graphs |
 | **anaiis-writing** | Literature review synthesis, manuscript copyediting |
 | **anaiis-meta** | Parallel subagent orchestration |
@@ -37,7 +37,7 @@ or local setup is required.
 ```json
 "enabledPlugins": {
     "anaiis-review@anaiis-plugins": true,
-    "anaiis-git@anaiis-plugins": true,
+    "anaiis-git-ops@anaiis-plugins": true,
     "anaiis-data@anaiis-plugins": true,
     "anaiis-writing@anaiis-plugins": true,
     "anaiis-meta@anaiis-plugins": true
@@ -56,7 +56,7 @@ Once installed, invoke skills by name at the prompt:
 /anaiis-litreview "topic"       -- synthesize literature from your local catalog
 /anaiis-duckdb                  -- query a local CSV, Parquet, or Excel file
 /anaiis-termchart               -- quick ASCII/ANSI charts in the terminal (also auto-triggers on viz requests)
-/anaiis-gitpr                   -- open a pull request with a structured body
+/anaiis-git-ops:pr              -- open a pull request with a structured body
 /anaiis-peerreview              -- peer-review a manuscript draft
 ```
 
@@ -71,7 +71,7 @@ Type `/` in Claude Code to see all available skills with descriptions.
 | Plugin | CLIs needed |
 |---|---|
 | anaiis-review | `gh` (GitHub CLI), `coderabbit` CLI |
-| anaiis-git | `gh` |
+| anaiis-git-ops | `gh` |
 | anaiis-data | `duckdb`, `uv` (for Python scripts), `gh` for web verify |
 | anaiis-writing | none beyond Claude Code |
 | anaiis-meta | none beyond Claude Code |

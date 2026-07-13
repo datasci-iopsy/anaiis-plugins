@@ -382,9 +382,9 @@ CodeRabbit triage complete.
   Reverted (intent fail):           <total>  (<N of M> were sev-3 judgment findings)
 
 Next steps:
-  /anaiis-gitrebase   -- consolidate commits into logical groups
-  /anaiis-changelog   -- generate PR description from clean history
-  /anaiis-gitpr       -- open the PR
+  /anaiis-git-ops:rebase      -- consolidate commits into logical groups
+  /anaiis-git-ops:changelog   -- generate PR description from clean history
+  /anaiis-git-ops:pr          -- open the PR
 ```
 
 **Stalled** (surgeon could not fix remaining findings):

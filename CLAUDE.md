@@ -1,7 +1,7 @@
 # anaiis-plugins: Claude instructions
 
 Plugin repo for the anaiis Claude Code skill suite (I-O Psychology research workflows).
-Five plugins: `review`, `git`, `data`, `writing`, `meta`. Global behavioral rules live
+Five plugins: `review`, `git-ops`, `data`, `writing`, `meta`. Global behavioral rules live
 in `~/.claude/CLAUDE.md` and `~/anaiis-dotfiles/claude/rules/`; this file adds repo-specific
 instructions layered on top of those.
 
@@ -66,7 +66,7 @@ when a trigger condition is met (see below).
 | Layout | One `SKILL.md`, prose only | `SKILL.md` + `references/`, `lib/`, optional `agents/` |
 | When to use | Procedural workflow, no scripts, no deterministic logic to test | Scripts, deterministic transforms, multi-phase flow, or shared logic |
 | Tests | None | `lib/smoke.sh` with fixture-based checks |
-| Working example | `anaiis-changelog`, `anaiis-copyedit`, `anaiis-preflight` | `anaiis-coderabbit` |
+| Working example | `changelog`, `anaiis-copyedit`, `anaiis-preflight` | `anaiis-coderabbit` |
 
 ### Decision tree: when to promote flat to expanded
 
@@ -86,7 +86,7 @@ Promote when **any** of the following is true:
 - Create `lib/` for scripts. Every new script gets at least one fixture test in
   `lib/smoke.sh`.
 - Create `agents/` only for skill-local agents. Cross-skill agents go in
-  `<plugin>/agents/` and are registered in `plugin.json`.
+  `<plugin>/agents/` and are auto-discovered; plugin.json has no `agents` array.
 
 ---
 
