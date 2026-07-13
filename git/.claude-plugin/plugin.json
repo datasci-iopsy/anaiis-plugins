@@ -1,8 +1,0 @@
-{
-    "name": "anaiis-git",
-    "description": "Git, PR, changelog, and preflight workflows",
-    "version": "0.1.0",
-    "author": {
-        "name": "datasci-iopsy"
-    }
-}
