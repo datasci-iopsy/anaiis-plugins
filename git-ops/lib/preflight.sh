@@ -9,9 +9,16 @@
 #  11  detached HEAD (no named branch)
 #  12  on main or master
 #  13  merge commits present in range
+#  14  requested branch does not match actual checkout
 set -euo pipefail
 
-BRANCH="${1:-$(git branch --show-current)}"
+actual_branch="$(git branch --show-current)"
+if [ -n "${1:-}" ] && [ "$1" != "$actual_branch" ]; then
+	branch_arg_mismatch=true
+else
+	branch_arg_mismatch=false
+fi
+BRANCH="$actual_branch"
 BASE="${2:-main}"
 
 checks='[]'
@@ -37,6 +44,14 @@ if [ -n "$BRANCH" ]; then
 else
 	add_check "named_branch" false "detached HEAD"
 	[ "$exit_code" -eq 0 ] && exit_code=11
+fi
+
+# 2b. Requested branch matches actual checkout
+if [ "$branch_arg_mismatch" = true ]; then
+	add_check "branch_matches_checkout" false "requested branch '${1}' does not match current checkout '${actual_branch}'"
+	[ "$exit_code" -eq 0 ] && exit_code=14
+else
+	add_check "branch_matches_checkout" true "requested branch matches current checkout"
 fi
 
 # 3. Not on main/master

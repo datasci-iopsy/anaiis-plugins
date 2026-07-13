@@ -99,6 +99,7 @@ into place. Exit code:
 | 31 | tmp branch already exists | stop; tell the user to resolve or delete the stale branch |
 | 32 | pre-commit hook failed mid-reconstruction | stop; show the hook output verbatim; the tag and tmp branch are preserved; ask the user: fix and retry, skip the hook with explicit `--no-verify` approval, or abort via the recovery command in stderr |
 | 33 | non-empty diff after reconstruction | stop; show the diff; the tag and tmp branch are preserved; do NOT proceed; offer the recovery command in stderr |
+| 34 | same file path assigned to more than one group in plan.json | stop; show the duplicated path(s) and group indices from stderr; no destructive action was taken; ask the user or re-run planning to fix `plan.json` |
 
 ---
 
@@ -148,4 +149,5 @@ action.
 | Safety tag or tmp branch collision (exit 30/31) | Resolve or delete the stale ref, then re-run |
 | Hook failure during commit (exit 32) | Fix / skip (with explicit approval) / abort via the printed recovery command |
 | Tree verification fails (exit 33) | `git checkout <branch> && git reset --hard safety/pre-rebase-<branch> && git branch -D tmp/rebase-<branch>` |
+| Duplicate file across groups (exit 34) | Fix `plan.json` (or re-run planning) so each file appears in exactly one group, then re-run |
 | Process interrupted mid-execute | Same revert command as above; the safety tag always survives until the user deletes it |

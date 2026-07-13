@@ -12,6 +12,8 @@
 #  31  tmp branch already exists (abort before any destructive action)
 #  32  pre-commit hook failed during a group commit (tag + tmp preserved)
 #  33  non-empty diff after reconstruction (tag + tmp preserved)
+#  34  same file path assigned to more than one group in plan.json (abort before any destructive action)
+#  35  branch moved since the run.json snapshot; compare-and-swap aborted (tag + tmp preserved)
 set -euo pipefail
 
 RUN_DIR="$1"
@@ -32,6 +34,16 @@ fi
 if git rev-parse -q --verify "refs/heads/${tmp_branch}" >/dev/null; then
 	printf 'ERROR: tmp branch %s already exists; resolve or delete it before retrying\n' "$tmp_branch" >&2
 	exit 31
+fi
+
+dup_files=$(jq -r '.groups | to_entries[] | .key as $i | .value.files[] | "\(.)\t\($i)"' "$PLAN_JSON" | sort | cut -f1 | uniq -d)
+if [ -n "$dup_files" ]; then
+	printf 'ERROR: plan.json assigns the following file(s) to more than one group:\n' >&2
+	while IFS= read -r dup_file; do
+		group_idxs=$(jq -r --arg f "$dup_file" '.groups | to_entries[] | select(.value.files | index($f) != null) | (.key + 1)' "$PLAN_JSON" | paste -sd, -)
+		printf '  %s (groups %s)\n' "$dup_file" "$group_idxs" >&2
+	done <<<"$dup_files"
+	exit 34
 fi
 
 git tag "$safety_tag" "$head_sha"
@@ -74,8 +86,14 @@ if [ -n "$tree_diff" ]; then
 	exit 33
 fi
 
+tmp_sha=$(git rev-parse "$tmp_branch")
+if ! git update-ref "refs/heads/${branch}" "$tmp_sha" "$head_sha"; then
+	printf 'ERROR: branch %s has moved since the run.json snapshot (expected %s); aborting to avoid discarding new commits\n' "$branch" "$head_sha" >&2
+	printf 'Safety tag %s and tmp branch %s preserved.\n' "$safety_tag" "$tmp_branch" >&2
+	exit 35
+fi
+
 git checkout -q "$branch"
-git reset -q --hard "$tmp_branch"
 git branch -q -d "$tmp_branch"
 
 jq -nc --arg branch "$branch" --argjson n "$groups_committed" --arg tag "$safety_tag" \

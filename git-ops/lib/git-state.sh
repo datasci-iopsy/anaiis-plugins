@@ -42,19 +42,25 @@ done
 commits_json="[]"
 for sha in $shas; do
 	subject=$(git show -s --format=%s "$sha")
-	numstat=$(git show --numstat --format= -M "$sha")
 	files_json="[]"
 	ins_total=0
 	del_total=0
-	while IFS=$'\t' read -r ins del file; do
-		[ -z "$file" ] && continue
-		# Rename entries render as "old => {new}" or "old => new"; keep the final path only.
-		final_file="${file##*=> }"
-		final_file="${final_file%\}}"
-		files_json=$(jq -c --argjson f "$files_json" --arg file "$final_file" -n '$f + [$file]')
+	while IFS= read -r -d '' token; do
+		[ -z "$token" ] && continue
+		ins="${token%%$'\t'*}"
+		rest="${token#*$'\t'}"
+		del="${rest%%$'\t'*}"
+		path="${rest#*$'\t'}"
+		if [ -z "$path" ]; then
+			# Rename/copy record: path field was empty, so the next two NUL-delimited
+			# tokens are the old path (discard) and the new/destination path (use it).
+			IFS= read -r -d '' _old_path
+			IFS= read -r -d '' path
+		fi
+		files_json=$(jq -c --argjson f "$files_json" --arg file "$path" -n '$f + [$file]')
 		[ "$ins" != "-" ] && ins_total=$((ins_total + ins))
 		[ "$del" != "-" ] && del_total=$((del_total + del))
-	done <<<"$numstat"
+	done < <(git show --numstat -z --format= -M "$sha")
 	commits_json=$(jq -c --argjson c "$commits_json" --arg sha "$sha" --arg subject "$subject" \
 		--argjson files "$files_json" --argjson ins "$ins_total" --argjson del "$del_total" \
 		-n '$c + [{sha: $sha, subject: $subject, files: $files, insertions: $ins, deletions: $del}]')
