@@ -23,7 +23,7 @@ ledger_init() {
 		fi
 		suffix=$((suffix + 1))
 	done
-	jq -n --arg branch "$branch" --arg base "$base" --arg mode "$mode" --arg ts "$iso" \
+	jq -nc --arg branch "$branch" --arg base "$base" --arg mode "$mode" --arg ts "$iso" \
 		'{event:"review_started", branch:$branch, base:$base, mode:$mode, ts:$ts}' >>"$LEDGER"
 	export LEDGER
 }
@@ -155,12 +155,20 @@ ledger_intent_failed() {
 # Print all IDs that already have a terminal event (intent_verified or skip) across all ledgers for this PR.
 # Usage: ledger_handled_ids <pr_number>
 # Prints one ID per line.
+# Line-tolerant: -R + fromjson? parses each line independently, so one corrupt
+# or truncated ledger file cannot poison the concatenated stream and silently
+# disable idempotency for every PR. Multi-line (pretty-printed) events are
+# dropped by line parsing, but every event this function selects is written
+# compact by _ledger_event; only pre-fix review_started events were multi-line
+# and those carry no id.
 ledger_handled_ids() {
 	local pr="$1"
 	local pattern="PR-${pr}-"
 	[ -d "$LEDGER_DIR" ] || return 0
-	find "$LEDGER_DIR" -name "*.jsonl" -exec cat {} + 2>/dev/null \
-		| jq -r --arg pat "$pattern" \
-			'select((.event == "intent_verified" or .event == "skip") and (.id | startswith($pat))) | .id' 2>/dev/null \
+	find "$LEDGER_DIR" -name "*.jsonl" -exec sh -c \
+		'for file do cat "$file"; printf "\n"; done' sh {} + 2>/dev/null \
+		| jq -rR --arg pat "$pattern" \
+			'fromjson? // empty
+			| select((.event == "intent_verified" or .event == "skip") and (.id | startswith($pat))) | .id' 2>/dev/null \
 		| sort -u
 }
