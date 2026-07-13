@@ -34,6 +34,8 @@ Refine the draft into final groups, applying:
 
 Every file that appears anywhere in `commits.json` must end up in exactly one place: one group's `files`, or `flagged`. None may be silently dropped.
 
+Every commit SHA in `commits.json`, including those left in `draft-groups.json`'s `ungrouped` bucket, must appear in exactly one group's `commits` array in the final output; no SHA may be duplicated or omitted.
+
 Maximum 10 groups. If the natural grouping needs more, merge the smallest related groups rather than exceeding the cap.
 
 ## Output contract
