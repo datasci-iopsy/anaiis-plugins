@@ -1,6 +1,6 @@
 ---
-name: anaiis-gitpr
-description: "Explicit /anaiis-gitpr, open a pull request after CodeRabbit triage and commit cleanup"
+name: pr
+description: "Explicit /anaiis-git-ops:pr, open a pull request after CodeRabbit triage and commit cleanup"
 user-invocable: true
 trigger: manual
 version: 0.1.0
@@ -14,7 +14,7 @@ Create a pull request for the current branch. Checks for an existing PR first, i
 
 Run after:
 1. CodeRabbit triage is complete and all rated-4/5 fixes are committed
-2. Commits have been cleaned up (anaiis-gitrebase if needed)
+2. Commits have been cleaned up (rebase if needed)
 
 ## Process
 
