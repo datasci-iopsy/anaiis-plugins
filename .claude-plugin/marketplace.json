@@ -13,9 +13,9 @@
             "source": "./review"
         },
         {
-            "name": "anaiis-git",
-            "description": "Git, PR, changelog, and preflight workflows",
-            "source": "./git"
+            "name": "anaiis-git-ops",
+            "description": "Git ops: rebase, changelog, PR, and finish pipelines",
+            "source": "./git-ops"
         },
         {
             "name": "anaiis-data",

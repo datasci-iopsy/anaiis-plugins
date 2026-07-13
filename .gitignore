@@ -24,6 +24,9 @@ lib64/
 # Allow lib/ inside skill directories (shell scripts, not compiled artifacts)
 !**/skills/*/lib/
 !**/skills/*/lib/**
+# Allow the plugin-level shared lib/ in git-ops (shell scripts, not compiled artifacts)
+!git-ops/lib/
+!git-ops/lib/**
 parts/
 sdist/
 var/
