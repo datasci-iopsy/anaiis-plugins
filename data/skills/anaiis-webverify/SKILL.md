@@ -22,7 +22,7 @@ A five-phase, terminal-focused workflow for rapidly prototyping and verifying br
 
 - Data analysis, SQL, or file queries (use anaiis-duckdb)
 - Literature review or synthesis (use anaiis-litreview)
-- Git, PR, or commit operations (use anaiis-gitpr / anaiis-gitrebase)
+- Git, PR, or commit operations (use anaiis-git-ops:pr / anaiis-git-ops:rebase)
 - Tasks that produce no browser-rendered artifact
 
 ## Setup requirements

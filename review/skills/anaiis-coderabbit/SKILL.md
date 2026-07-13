@@ -3,7 +3,7 @@ name: anaiis-coderabbit
 description: "CLI-driven CodeRabbit triage in two modes: (1) local pre-PR via coderabbit review --agent; (2) post-PR via gh api against bot comments. Triages by severity, fixes 3-5 with code-surgeon, verifies with two-stage check (tests + intent), commits, and pushes committed fixes with branch safety guards."
 user-invocable: true
 trigger: manual
-version: 0.2.7
+version: 0.2.8
 ---
 
 # anaiis-coderabbit: CLI-Driven CodeRabbit Triage
@@ -37,7 +37,7 @@ integrations live in `references/toolbox.md`; load it at Phase 1/1'.
 
 - Never edit files, push, or force-push on/to `main` or `master`.
 - Never `git add -A`, `git add .`, `--no-verify`, or amend.
-- Never auto-chain into `/anaiis-gitrebase`, `/anaiis-changelog`, or `/anaiis-gitpr`.
+- Never auto-chain into `/anaiis-git-ops:rebase`, `/anaiis-git-ops:changelog`, or `/anaiis-git-ops:pr`.
 - Max 3 *counted* review rounds per session; a round counts only when the review returns a
   result (`lib/review-round.sh` grants one free retry per timeout, so raw CLI invocations
   can exceed 3).
