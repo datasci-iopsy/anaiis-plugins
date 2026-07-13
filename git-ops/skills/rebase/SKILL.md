@@ -1,6 +1,6 @@
 ---
-name: anaiis-gitrebase
-description: "Explicit /anaiis-gitrebase, rebase commits into logical groups before PR review"
+name: rebase
+description: "Explicit /anaiis-git-ops:rebase, rebase commits into logical groups before PR review"
 user-invocable: true
 trigger: manual
 version: 0.1.0
@@ -21,9 +21,9 @@ $ARGUMENTS: [branch] [base] [--dry-run]
 - `--dry-run`: run phases 1 and 2 only; output proposed grouping without executing
 
 Examples:
-- `/anaiis-gitrebase`
-- `/anaiis-gitrebase feature/my-branch main`
-- `/anaiis-gitrebase --dry-run`
+- `/anaiis-git-ops:rebase`
+- `/anaiis-git-ops:rebase feature/my-branch main`
+- `/anaiis-git-ops:rebase --dry-run`
 
 ## Tool usage
 
@@ -60,5 +60,5 @@ Load `references/phases.md` when a phase begins.
 
 ## Integration
 
-- `anaiis-changelog`: after rebase, run to generate a PR description from the clean commit history.
+- `changelog`: after rebase, run to generate a PR description from the clean commit history.
 - `anaiis-preflight`: not needed; this skill does its own git-state preflight in Phase 1.

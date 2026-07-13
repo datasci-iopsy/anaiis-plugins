@@ -1,4 +1,4 @@
-# anaiis-gitrebase: Phase Detail
+# rebase: Phase Detail
 
 ## Phase 1: Preflight (read-only)
 
