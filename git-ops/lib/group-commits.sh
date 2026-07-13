@@ -15,7 +15,7 @@ ungrouped="[]"
 shas=$(jq -r '.[].sha' "$COMMITS")
 for sha in $shas; do
 	subject=$(jq -r --arg sha "$sha" '.[] | select(.sha == $sha) | .subject' "$COMMITS")
-	type=$(printf '%s' "$subject" | grep -oE '^(feat|fix|refactor|chore|docs|test|style|perf|build|ci)(\([^)]*\))?:' | grep -oE '^[a-z]+' || true)
+	type=$(printf '%s' "$subject" | grep -oE '^(feat|fix|refactor|chore|docs|test|style|perf|build|ci)(\([^)]*\))?!?:' | grep -oE '^[a-z]+' || true)
 
 	if [ -z "$type" ]; then
 		ungrouped=$(jq -c --argjson u "$ungrouped" --arg sha "$sha" -n '$u + [$sha]')

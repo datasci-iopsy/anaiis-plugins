@@ -14,7 +14,7 @@ Claude never force-pushes; the final phase hands the user the exact command.
 
 ## Scope
 
-```
+```text
 $ARGUMENTS: [branch] [base] [--dry-run] [--confirm]
 ```
 

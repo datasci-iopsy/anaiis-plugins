@@ -67,9 +67,9 @@ for i in $(seq 0 $((group_count - 1))); do
 		continue # nothing staged for this group (files already matched fork state)
 	fi
 
-	hook_output=$(git commit -q -m "$message" 2>&1) || {
-		printf 'ERROR: pre-commit hook failed for group %d ("%s")\n' "$((i + 1))" "$message" >&2
-		printf '%s\n' "$hook_output" >&2
+	commit_output=$(git commit -q -m "$message" 2>&1) || {
+		printf 'ERROR: group commit failed for group %d ("%s")\n' "$((i + 1))" "$message" >&2
+		printf '%s\n' "$commit_output" >&2
 		printf 'Safety tag %s and tmp branch %s preserved.\n' "$safety_tag" "$tmp_branch" >&2
 		printf 'Recovery: git checkout %s && git reset --hard %s && git branch -D %s\n' "$branch" "$safety_tag" "$tmp_branch" >&2
 		exit 32
