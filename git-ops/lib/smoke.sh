@@ -28,6 +28,9 @@ new_repo() {
 	git init -q -b main "$dir"
 	git -C "$dir" config user.email "smoke@test.com"
 	git -C "$dir" config user.name "smoke"
+	git -C "$dir" config commit.gpgsign false
+	git -C "$dir" config tag.gpgsign false
+	git -C "$dir" config core.hooksPath "$(git -C "$dir" rev-parse --git-dir)/hooks"
 }
 
 # ---------------------------------------------------------------------------
