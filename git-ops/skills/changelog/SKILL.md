@@ -1,6 +1,6 @@
 ---
-name: anaiis-changelog
-description: Generate a changelog or release notes from the current branch diff for PR preparation
+name: changelog
+description: "Explicit /anaiis-git-ops:changelog, generate a changelog or release notes from the current branch diff for PR preparation"
 user-invocable: true
 trigger: manual
 version: 0.1.0

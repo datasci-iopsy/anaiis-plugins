@@ -64,9 +64,9 @@ and gh POST wiring (S11), fetch-thread-state.sh GraphQL flattening (S12). Set
 
 ## Integration
 
-- `/anaiis-gitrebase`: run after this skill to consolidate CR fix commits.
-- `/anaiis-changelog`: run after rebase to generate a PR description.
-- `/anaiis-gitpr`: run after changelog to open the PR.
+- `/anaiis-git-ops:rebase`: run after this skill to consolidate CR fix commits.
+- `/anaiis-git-ops:changelog`: run after rebase to generate a PR description.
+- `/anaiis-git-ops:pr`: run after changelog to open the PR.
 - `lib/detect-tests.sh`: called during Phase 5 to identify the project test command.
 - `lib/ledger.sh`: shared ledger helpers sourced by phases and lib scripts.
 - `lib/review-round.sh`: called during Phase 3 and Phase 7 to run a review round with a deterministic timeout and one free retry.
