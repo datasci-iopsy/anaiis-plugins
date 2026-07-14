@@ -43,7 +43,7 @@ Maximum 10 groups. If the natural grouping needs more, merge the smallest relate
 
 Emit exactly one line of JSON, nothing else:
 
-```
+```json
 {"groups": [{"message": "<type: imperative summary>", "commits": ["<sha>", ...], "files": ["<path>", ...]}], "flagged": ["<path>", ...], "rationale": "<one sentence>"}
 ```
 
