@@ -35,7 +35,14 @@ fi
 # final output. No process-substitution/pipeline race between the two checks.
 RAW=$(mktemp)
 trap 'rm -f "$RAW"' EXIT
-coderabbit review --agent --base "$BASE" "$@" >"$RAW"
+if coderabbit review --agent --base "$BASE" "$@" >"$RAW"; then
+	:
+else
+	rc=$?
+	echo "[run-review] coderabbit review --agent failed (exit ${rc}); raw output:" >&2
+	cat "$RAW" >&2
+	exit "$rc"
+fi
 
 # type=="error" events can appear on stdout even when the CLI's own exit code
 # is 0. Surface them on stderr and fail loudly instead of letting the

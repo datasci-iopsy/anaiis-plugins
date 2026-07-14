@@ -657,8 +657,29 @@ s10() {
 		errors=$((errors + 1))
 	fi
 
+	# 4. coderabbit process itself crashes mid-review -> exit propagated, raw
+	# output surfaced on stderr instead of silently discarded.
+	if out=$(FAKE_CODERABBIT_FIXTURE="${fixtures}/crash.ndjson" FAKE_CODERABBIT_EXIT_CODE=1 PATH="${fakebin}:${PATH}" bash "$run" "main" 2>"${TMP}/s10-crash-err"); then
+		printf '  FAIL S10.4: expected non-zero exit when coderabbit itself crashes\n'
+		errors=$((errors + 1))
+	else
+		code=$?
+		if [ "$code" -ne 1 ]; then
+			printf '  FAIL S10.4: expected exit 1 when coderabbit itself crashes, got %s\n' "$code"
+			errors=$((errors + 1))
+		fi
+		if [ -n "$out" ]; then
+			printf '  FAIL S10.4: expected no findings on stdout when coderabbit itself crashes\n'
+			errors=$((errors + 1))
+		fi
+		if ! grep -q 'review_context' "${TMP}/s10-crash-err"; then
+			printf '  FAIL S10.4: expected the raw partial output to be surfaced on stderr\n'
+			errors=$((errors + 1))
+		fi
+	fi
+
 	if [ "$errors" -eq 0 ]; then
-		pass "S10: run-review.sh error-event handling + expanded severity mapping (3 checks)"
+		pass "S10: run-review.sh error-event handling + expanded severity mapping (4 checks)"
 	else
 		fail "S10: run-review.sh (${errors} checks failed)"
 	fi
