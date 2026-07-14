@@ -45,7 +45,8 @@ or local setup is required.
 ```
 
 Claude Code fetches the skills from GitHub on first use and caches them locally.
-To pick up updates after a new release, start a fresh Claude Code session.
+Updates can land automatically in the background after startup; to pull a release
+mid-session, run `/plugin` (update the plugin there) followed by `/reload-plugins`.
 
 ## Use
 
@@ -157,6 +158,8 @@ for when to promote a flat skill to the expanded layout.
 - Work on a `claude/<topic>` branch; never edit directly on `main`.
 - One logical concern per commit. Stage files by name.
 - Run local validation before opening a PR (see above).
+- Bump the plugin's `plugin.json` version in the same PR; releases are invisible to
+  installed copies without it. See `CONTRIBUTING.md` for the post-merge refresh flow.
 
 ### License
 

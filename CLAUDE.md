@@ -122,17 +122,23 @@ the final verification passes.
 |---|---|---|
 | 1. Branch | `git checkout -b claude/<topic>` from the user's feature branch | On correct branch |
 | 2. Edit | Modify skill files, lib scripts, agents, or fixtures | Files changed |
-| 3. Validate | Run local validation block below | Lint + manifest pass |
-| 4. Smoke test | Run `lib/smoke.sh` if the skill has one | All tests pass |
-| 5. Commit | Stage by name, one concern per commit | Clean `git status` |
-| 6. Merge | User merges PR to `main` | Confirmed on `main` |
-| 7. Sync marketplace | `git -C ~/.claude/plugins/marketplaces/anaiis-plugins pull` | Output shows new commits |
-| 8. Refresh plugin | `/plugin` then `/reload-plugins` in Claude Code | No error |
-| 9. Verify cache | Re-run `lib/smoke.sh`; no S5.3 warning | 7/7 pass, no warnings |
+| 3. Bump version | Raise `version` in `<plugin>/.claude-plugin/plugin.json` | Version differs from `main`'s |
+| 4. Validate | Run local validation block below | Lint + manifest pass |
+| 5. Smoke test | Run `lib/smoke.sh` if the skill has one | All tests pass |
+| 6. Commit | Stage by name, one concern per commit | Clean `git status` |
+| 7. Merge | User merges PR to `main` | Confirmed on `main` |
+| 8. Sync marketplace | `git -C ~/.claude/plugins/marketplaces/anaiis-plugins pull` | Output shows new commits |
+| 9. Repin | `/plugin` update flow, or `claude plugin update <plugin>@anaiis-plugins` | `installed_plugins.json` shows the new version |
+| 10. Reload | `/reload-plugins` | Reload summary prints |
+| 11. Verify live | Invoke a skill from the plugin; check its "Base directory for this skill" path | Path contains the new version |
 
-**Steps 7-9 are mandatory after every merge that touches skills, agents, or `plugin.json`.**
-New agents and updated skill files are invisible to Claude until the cache is refreshed.
-Surface step 7 proactively after confirming a merge landed on `main`.
+**Steps 8-11 are mandatory after every merge that touches skills, agents, or `plugin.json`.**
+Claude Code loads the version pinned in `~/.claude/plugins/installed_plugins.json`; only
+step 9 moves that pin. `/reload-plugins` alone reloads the old pin. Skipping step 3 makes
+the release invisible: Claude Code keeps the cached copy when the version string is
+unchanged. Cache-directory contents or a passing smoke run do not prove the harness loads
+the new version; only step 11's live path check does. Surface step 8 proactively after
+confirming a merge landed on `main`.
 
 ---
 
