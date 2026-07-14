@@ -279,20 +279,28 @@ s11() {
 	git -C "$repo" checkout -q -b feat/full
 	echo "def f(): pass" >"${repo}/feature.py"
 	git -C "$repo" add feature.py && git -C "$repo" commit -q -m "feat: add feature"
+	local feat_add_sha
+	feat_add_sha=$(git -C "$repo" rev-parse HEAD)
 	echo "def test_f(): assert True" >"${repo}/test_feature.py"
 	git -C "$repo" add test_feature.py && git -C "$repo" commit -q -m "test: add tests"
+	local test_sha
+	test_sha=$(git -C "$repo" rev-parse HEAD)
 	echo "def f(): return 42" >"${repo}/feature.py"
 	git -C "$repo" add feature.py && git -C "$repo" commit -q -m "feat: tweak feature"
+	local feat_tweak_sha
+	feat_tweak_sha=$(git -C "$repo" rev-parse HEAD)
 	git -C "$repo" rm -q config.yml && git -C "$repo" commit -q -m "chore: remove config"
+	local chore_sha
+	chore_sha=$(git -C "$repo" rev-parse HEAD)
 
 	local state_out run_dir
 	state_out=$(cd "$repo" && bash "${LIB}/git-state.sh" feat/full main)
 	run_dir=$(printf '%s' "$state_out" | jq -r '.run_dir')
-	cat >"${run_dir}/plan.json" <<'PLAN'
+	cat >"${run_dir}/plan.json" <<PLAN
 {"groups": [
-  {"message": "feat: implement feature", "commits": [], "files": ["feature.py"]},
-  {"message": "test: add tests for feature", "commits": [], "files": ["test_feature.py"]},
-  {"message": "chore: remove config", "commits": [], "files": ["config.yml"]}
+  {"message": "feat: implement feature", "commits": ["${feat_add_sha}", "${feat_tweak_sha}"], "files": ["feature.py"]},
+  {"message": "test: add tests for feature", "commits": ["${test_sha}"], "files": ["test_feature.py"]},
+  {"message": "chore: remove config", "commits": ["${chore_sha}"], "files": ["config.yml"]}
 ], "flagged": [], "rationale": "smoke fixture"}
 PLAN
 
@@ -342,13 +350,15 @@ s12() {
 	echo a >"${repo}/a.txt" && git -C "$repo" add a.txt && git -C "$repo" commit -q -m "chore: init"
 	git -C "$repo" checkout -q -b feat/bad
 	echo x >"${repo}/x.txt" && git -C "$repo" add x.txt && git -C "$repo" commit -q -m "feat: add x"
+	local x_sha
+	x_sha=$(git -C "$repo" rev-parse HEAD)
 	echo y >"${repo}/y.txt" && git -C "$repo" add y.txt && git -C "$repo" commit -q -m "feat: add y"
 
 	local state_out run_dir
 	state_out=$(cd "$repo" && bash "${LIB}/git-state.sh" feat/bad main)
 	run_dir=$(printf '%s' "$state_out" | jq -r '.run_dir')
-	cat >"${run_dir}/plan.json" <<'PLAN'
-{"groups": [{"message": "feat: add x", "commits": [], "files": ["x.txt"]}], "flagged": [], "rationale": "deliberately incomplete"}
+	cat >"${run_dir}/plan.json" <<PLAN
+{"groups": [{"message": "feat: add x", "commits": ["${x_sha}"], "files": ["x.txt"]}], "flagged": [], "rationale": "deliberately incomplete"}
 PLAN
 
 	(cd "$repo" && bash "${LIB}/apply-plan.sh" "$run_dir" >/dev/null 2>&1)
@@ -373,6 +383,8 @@ s13() {
 	echo a >"${repo}/a.txt" && git -C "$repo" add a.txt && git -C "$repo" commit -q -m "chore: init"
 	git -C "$repo" checkout -q -b feat/hook
 	echo x >"${repo}/x.txt" && git -C "$repo" add x.txt && git -C "$repo" commit -q -m "feat: add x"
+	local x_sha
+	x_sha=$(git -C "$repo" rev-parse HEAD)
 
 	mkdir -p "${repo}/.git/hooks"
 	printf '#!/usr/bin/env bash\necho "simulated lint failure" >&2\nexit 1\n' >"${repo}/.git/hooks/pre-commit"
@@ -381,8 +393,8 @@ s13() {
 	local state_out run_dir
 	state_out=$(cd "$repo" && bash "${LIB}/git-state.sh" feat/hook main)
 	run_dir=$(printf '%s' "$state_out" | jq -r '.run_dir')
-	cat >"${run_dir}/plan.json" <<'PLAN'
-{"groups": [{"message": "feat: add x", "commits": [], "files": ["x.txt"]}], "flagged": [], "rationale": "smoke fixture"}
+	cat >"${run_dir}/plan.json" <<PLAN
+{"groups": [{"message": "feat: add x", "commits": ["${x_sha}"], "files": ["x.txt"]}], "flagged": [], "rationale": "smoke fixture"}
 PLAN
 
 	local err
@@ -408,12 +420,14 @@ s14() {
 	echo a >"${repo}/a.txt" && git -C "$repo" add a.txt && git -C "$repo" commit -q -m "chore: init"
 	git -C "$repo" checkout -q -b feat/collide
 	echo x >"${repo}/x.txt" && git -C "$repo" add x.txt && git -C "$repo" commit -q -m "feat: add x"
+	local x_sha
+	x_sha=$(git -C "$repo" rev-parse HEAD)
 
 	local state_out run_dir
 	state_out=$(cd "$repo" && bash "${LIB}/git-state.sh" feat/collide main)
 	run_dir=$(printf '%s' "$state_out" | jq -r '.run_dir')
-	cat >"${run_dir}/plan.json" <<'PLAN'
-{"groups": [{"message": "feat: add x", "commits": [], "files": ["x.txt"]}], "flagged": [], "rationale": "smoke fixture"}
+	cat >"${run_dir}/plan.json" <<PLAN
+{"groups": [{"message": "feat: add x", "commits": ["${x_sha}"], "files": ["x.txt"]}], "flagged": [], "rationale": "smoke fixture"}
 PLAN
 
 	git -C "$repo" tag "safety/pre-rebase-feat/collide"
@@ -448,12 +462,14 @@ s15() {
 		fail "S15: rebase-planner.md must pin model: claude-sonnet-5"
 		return
 	fi
-	if ! grep -A2 "^tools:" "$agent" | grep -q "Read" || ! grep -A2 "^tools:" "$agent" | grep -q "Grep"; then
-		fail "S15: rebase-planner.md tools must include exactly Read and Grep"
-		return
-	fi
-	if grep -A3 "^tools:" "$agent" | grep -qE "Bash|Write|Edit"; then
-		fail "S15: rebase-planner.md tools must not include Bash/Write/Edit"
+	local tools
+	tools=$(awk '
+		/^tools:$/ { in_tools=1; next }
+		in_tools && /^  - / { sub(/^  - /, ""); print; next }
+		in_tools { exit }
+	' "$agent")
+	if [ "$tools" != $'Read\nGrep' ]; then
+		fail "S15: rebase-planner.md tools must be exactly Read, Grep (got: ${tools:-<empty>})"
 		return
 	fi
 	if ! grep -q '"groups":' "$agent"; then
