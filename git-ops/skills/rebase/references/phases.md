@@ -1,149 +1,115 @@
 # rebase: Phase Detail
 
-## Phase 1: Preflight (read-only)
-
-Run as two separate Bash calls. The first resolves the fork SHA; the second uses it as a literal.
-
-**Call 1, resolve fork point:**
-```bash
-git status --porcelain && \
-git branch --show-current && \
-git merge-base <base> HEAD
-```
-
-**Call 2, inspect range (substitute the literal SHA returned above for `<fork>`):**
-```bash
-git log --oneline <fork>..HEAD && \
-git log --oneline --merges <fork>..HEAD
-```
-
-**Hard stops -- do not proceed if:**
-- Working tree is dirty (`git status --porcelain` returns output) -- tell user to stash or commit first
-- Merge commits exist in range (last command returns output) -- refuse; merge commits require manual handling
-- Detached HEAD -- require a named branch
-- No commits in range -- nothing to rebase
+Resolve `LIB_DIR` once at the start of the run: two directories up from this skill's own
+base directory (shown in your invocation context), then `/lib`. All phases below invoke
+scripts as `bash "$LIB_DIR/<script>.sh" ...`.
 
 ---
 
-## Phase 2: Analysis (read-only)
+## Phase 0: Preflight
 
 ```bash
-git diff --stat <fork>..HEAD && \
-git diff --name-only -M <fork>..HEAD && \
-git log --oneline --name-only <fork>..HEAD
+bash "$LIB_DIR/preflight.sh" <branch> <base>
 ```
 
-Use `-M` (rename detection) in `--name-only` so renames are grouped correctly rather than appearing as delete + add.
+Parse the JSON verdict on stdout. Exit code maps to a hard stop:
 
-**Grouping heuristics:**
-1. Source files in the same module or package group together
-2. Test files group with the source files they test
-3. Config, tooling, and CI changes (Makefile, pyproject.toml, .github/, linting configs) form their own commit
-4. Documentation changes (README, CLAUDE.md) form their own commit unless tightly coupled to a specific feature
-5. A file appearing in multiple original commits: use its final state, placed in the logical group matching its purpose
-6. Binary files and submodules: flag explicitly and ask the user which group they belong to
+| Exit | Meaning | Action |
+|---|---|---|
+| 0 | all checks pass | continue to Phase 1 |
+| 10 | dirty working tree | stop; tell the user to commit or stash |
+| 11 | detached HEAD | stop; tell the user to check out a named branch |
+| 12 | on main/master | stop; refuse |
+| 13 | merge commits in range | stop; refuse, merge commits require manual handling |
 
-**Output format:**
-
-```
-Proposed rebase plan (N files, M logical commits):
-
-Commit 1: "feat(scope): description"
-  Files:
-  - path/to/file1.py
-  - path/to/test_file1.py
-
-Commit 2: "chore: description"
-  Files:
-  - pyproject.toml
-  - Makefile
-```
-
-If `--dry-run`: output the plan and stop.
+The `upstream` and `worktree` entries in the JSON are informational; carry the upstream
+divergence detail forward to Phase 6's hand-off message.
 
 ---
 
-**GATE 1:** Present the plan and ask the user to confirm, modify, or reject the grouping before any destructive work begins.
+## Phase 1: Git state
+
+```bash
+bash "$LIB_DIR/git-state.sh" <branch> <base>
+```
+
+Prints `{run_dir, fork_sha, head_sha, commit_count}` on success and creates
+`$RUN_DIR/{commits.json,diffstat.txt,diff.patch,run.json}`. Exit 20 means no commits in
+range: report "Nothing to rebase between `<base>` and `<branch>`." and stop.
+
+Capture `RUN_DIR` from the output; every later phase in this run uses it.
 
 ---
 
-## Phase 3: Execute (destructive)
-
-**First: capture state and create the safety bookmark.**
-
-Run each command separately (not chained with variable assignments) so each starts with `git`:
+## Phase 2: Deterministic draft grouping
 
 ```bash
-git rev-parse HEAD
-git branch --show-current
-git tag safety/pre-rebase-<branch> <sha>
+bash "$LIB_DIR/group-commits.sh" "$RUN_DIR"
 ```
 
-Tell the user:
-
-> Safety bookmark created: `safety/pre-rebase-<branch>` at `<sha>`.
-> To revert at any time: `git checkout <branch> && git reset --hard safety/pre-rebase-<branch>`
-
-**Then: build the temp branch.**
-
-```bash
-git checkout -b tmp/rebase-${BRANCH} <fork>
-```
-
-**For each commit group (in order):**
-
-```bash
-git checkout <literal-sha> -- <file1> <file2> ...
-git commit -m "<message>"
-```
-
-**IMPORTANT -- command formatting:** Always substitute the SHA as a literal hex string directly in the command. Never use shell variable assignments like `FINAL=<sha> && git checkout ${FINAL} --`. Commands must start with `git`. If the shell cwd is not the repo root, prefix every command with `git -C <absolute-repo-root>`.
-
-**File deletions:** if a file existed at the fork point but was deleted by HEAD, use `git rm <file>` in the appropriate group rather than `git checkout`.
-
-**On pre-commit hook failure:** pause immediately. Report which hook tripped and the full output. Ask the user how to proceed:
-1. Fix the issue (e.g., run `poetry lock`, fix lint errors) then retry
-2. Skip the hook for this commit with `--no-verify` (requires explicit user approval)
-3. Abort and revert to the safety tag
+Writes `$RUN_DIR/draft-groups.json`. Never fails; always continue to Phase 3.
 
 ---
 
-## Phase 4: Verify
+## Phase 3: Planner agent
 
-```bash
-git diff <literal-sha> tmp/rebase-<branch>
+Spawn `Agent(subagent_type="rebase-planner", description="Plan rebase for <branch>")`
+with `$RUN_DIR` as input. It reads `commits.json`, `diffstat.txt`, `diff.patch`, and
+`draft-groups.json`, and returns one JSON line: `{groups, flagged, rationale}`. Write its
+output to `$RUN_DIR/plan.json` verbatim.
+
+Print the plan:
+
+```text
+Proposed rebase plan (<N> groups):
+
+Group 1: "<message>"
+  - <file>
+  - <file>
+
+Group 2: "<message>"
+  - <file>
 ```
 
-- **Empty diff:** "Tree equality verified. New history produces identical file contents."
-- **Non-empty diff:** hard stop. Show the diff. Do NOT proceed. Offer to abort using literal branch/sha values.
+If `flagged` is non-empty, list the paths and ask the user which group each belongs to
+before proceeding; add the user's answer to the corresponding group's `files` in
+`plan.json` before Phase 4.
+
+- `--dry-run`: stop here. Do not invoke Phase 4.
+- `--confirm`: ask the user to confirm, modify, or reject the plan before proceeding.
+- Otherwise: proceed directly to Phase 4 (the plan itself is the deterministic-enough
+  gate; only anomalies pause the default run).
 
 ---
 
-**GATE 2:** User confirms verification passed and approves the branch swap.
-
----
-
-## Phase 5: Swap
-
-Use literal branch names (no shell variable expansions):
+## Phase 4-5: Apply and verify
 
 ```bash
-git checkout <branch>
-git reset --hard tmp/rebase-<branch>
-git branch -d tmp/rebase-<branch>
+bash "$LIB_DIR/apply-plan.sh" "$RUN_DIR"
 ```
 
-Output the final commit log:
+This single script call creates the safety tag, builds the tmp branch, commits each
+group in order, verifies tree equality against the original HEAD, and swaps the branch
+into place. Exit code:
 
-```bash
-git log <base>..HEAD --oneline
-```
+| Exit | Meaning | Action |
+|---|---|---|
+| 0 | success; branch swapped | continue to Phase 6 |
+| 30 | safety tag already exists | stop; tell the user to resolve or delete the stale tag |
+| 31 | tmp branch already exists | stop; tell the user to resolve or delete the stale branch |
+| 32 | group commit failed mid-reconstruction | stop; show the commit output verbatim; the tag and tmp branch are preserved; ask the user: fix and retry, skip a failing hook with explicit `--no-verify` approval, or abort via the recovery command in stderr |
+| 33 | non-empty diff after reconstruction | stop; show the diff; the tag and tmp branch are preserved; do NOT proceed; offer the recovery command in stderr |
+| 34 | same file path assigned to more than one group in plan.json | stop; show the duplicated path(s) and group indices from stderr; no destructive action was taken; ask the user or re-run planning to fix `plan.json` |
 
 ---
 
 ## Phase 6: Hand off (Claude does NOT push)
 
-Present the result and the commands for the user to run:
+```bash
+git log <base>..<branch> --oneline
+```
+
+Present the result and the command for the user to run. If Phase 0 reported no upstream:
 
 ```
 Rebase complete. <N> clean commits:
@@ -151,21 +117,23 @@ Rebase complete. <N> clean commits:
   <sha> <commit 1 message>
   <sha> <commit 2 message>
 
-To publish the rebased history, run:
+To publish, run:
 
-  git push --force-with-lease origin <branch>
+  git push origin <branch>
 
-The safety tag `safety/pre-rebase-<branch>` remains. To revert after pushing:
+The safety tag `safety/pre-rebase-<branch>` remains. To revert:
 
   git reset --hard safety/pre-rebase-<branch>
-  git push --force-with-lease origin <branch>
 
 Delete the safety tag when you are satisfied:
 
   git tag -d safety/pre-rebase-<branch>
 ```
 
-Claude does not execute the push. This is a human-only action.
+If Phase 0 reported an existing upstream, substitute `git push --force-with-lease origin
+<branch>` for the publish command and note that the revert command must be followed by
+the same force-with-lease push. Claude does not execute the push. This is a human-only
+action.
 
 ---
 
@@ -173,9 +141,13 @@ Claude does not execute the push. This is a human-only action.
 
 | Failure | Recovery |
 |---|---|
-| Dirty working tree | Stash (`git stash`) or commit, then re-run |
-| Merge commits in range | Refuse; suggest `git rebase --onto` manually |
-| Hook failure during commit | Pause, ask user: fix / skip (with approval) / abort |
-| Tree verification fails | `git checkout <branch> && git reset --hard safety/pre-rebase-<branch> && git branch -D tmp/rebase-<branch>` |
-| Process interrupted mid-execute | Same revert command as above |
-| Wrong files in a group | Revert to safety tag, re-run with corrected grouping |
+| Dirty working tree (exit 10) | Stash or commit, then re-run |
+| Detached HEAD (exit 11) | Check out a named branch, then re-run |
+| On main/master (exit 12) | Check out the correct feature branch |
+| Merge commits in range (exit 13) | Refuse; suggest `git rebase --onto` manually |
+| No commits in range (exit 20) | Nothing to do |
+| Safety tag or tmp branch collision (exit 30/31) | Resolve or delete the stale ref, then re-run |
+| Commit failure during group commit (exit 32) | Fix / skip (with explicit approval) / abort via the printed recovery command |
+| Tree verification fails (exit 33) | `git checkout <branch> && git reset --hard safety/pre-rebase-<branch> && git branch -D tmp/rebase-<branch>` |
+| Duplicate file across groups (exit 34) | Fix `plan.json` (or re-run planning) so each file appears in exactly one group, then re-run |
+| Process interrupted mid-execute | Same revert command as above; the safety tag always survives until the user deletes it |
