@@ -71,7 +71,7 @@ for i in $(seq 0 $((group_count - 1))); do
 		printf 'ERROR: group commit failed for group %d ("%s")\n' "$((i + 1))" "$message" >&2
 		printf '%s\n' "$commit_output" >&2
 		printf 'Safety tag %s and tmp branch %s preserved.\n' "$safety_tag" "$tmp_branch" >&2
-		printf 'Recovery: git checkout %s && git reset --hard %s && git branch -D %s\n' "$branch" "$safety_tag" "$tmp_branch" >&2
+		printf 'Recovery: git checkout -f %s && git branch -D %s\n' "$branch" "$tmp_branch" >&2
 		exit 32
 	}
 	groups_committed=$((groups_committed + 1))
@@ -82,7 +82,7 @@ if [ -n "$tree_diff" ]; then
 	printf 'ERROR: tree verification failed; reconstructed tree differs from %s\n' "$head_sha" >&2
 	printf '%s\n' "$tree_diff" >&2
 	printf 'Safety tag %s and tmp branch %s preserved.\n' "$safety_tag" "$tmp_branch" >&2
-	printf 'Recovery: git checkout %s && git reset --hard %s && git branch -D %s\n' "$branch" "$safety_tag" "$tmp_branch" >&2
+	printf 'Recovery: git checkout -f %s && git branch -D %s\n' "$branch" "$tmp_branch" >&2
 	exit 33
 fi
 

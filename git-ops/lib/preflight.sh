@@ -80,8 +80,12 @@ upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null ||
 if [ -z "$upstream" ]; then
 	add_check "upstream" true "no upstream; first push will be a plain push"
 else
-	read -r ahead behind < <(git rev-list --left-right --count "${upstream}...HEAD" | awk '{print $2, $1}')
-	add_check "upstream" true "upstream ${upstream}: ${ahead} ahead, ${behind} behind"
+	if counts=$(git rev-list --left-right --count "${upstream}...HEAD" 2>/dev/null); then
+		read -r behind ahead <<<"$counts"
+		add_check "upstream" true "upstream ${upstream}: ${ahead} ahead, ${behind} behind"
+	else
+		add_check "upstream" true "upstream ${upstream} configured but not resolvable locally"
+	fi
 fi
 
 # 6. Worktree note (informational; never fails preflight on its own)
