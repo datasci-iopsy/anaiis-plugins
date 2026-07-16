@@ -48,11 +48,11 @@ fi
 
 BODY=$(
 	cat <<EOF
-**anaiis-coderabbit triage: skipped (severity ${SEVERITY}).**
+**rabbit-sweep triage: skipped (severity ${SEVERITY}).**
 
 ${RATIONALE}
 
-Reply here if this should be reconsidered; it will be re-triaged on the next \`/anaiis-coderabbit --pr\` run.
+Reply here if this should be reconsidered; it will be re-triaged on the next \`/anaiis-review:rabbit-sweep --pr\` run.
 EOF
 )
 

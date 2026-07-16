@@ -1,12 +1,12 @@
 ---
-name: anaiis-coderabbit
+name: rabbit-sweep
 description: "CLI-driven CodeRabbit triage in two modes: (1) local pre-PR via coderabbit review --agent; (2) post-PR via gh api against bot comments. Triages by severity, fixes 3-5 with code-surgeon, verifies with two-stage check (tests + intent), commits, and pushes committed fixes with branch safety guards."
 user-invocable: true
 trigger: manual
-version: 0.2.8
+version: 0.3.0
 ---
 
-# anaiis-coderabbit: CLI-Driven CodeRabbit Triage
+# rabbit-sweep: CLI-Driven CodeRabbit Triage
 
 Two modes, one triage loop. Local mode (no args) reviews the current branch via the
 CodeRabbit CLI before a PR exists. PR mode (`--pr <N>`) triages CodeRabbit bot comments on
@@ -16,12 +16,19 @@ fixes behind branch guards.
 ## Arguments
 
 ```
-$ARGUMENTS: [--pr <number>] [--base <branch>] [--type <all|committed|uncommitted>] [--dir <path>]
+$ARGUMENTS: [auto|all] [--pr <number>] [--base <branch>] [--type <all|committed|uncommitted>] [--dir <path>]
 ```
 
 `--pr` switches to PR mode (mutually exclusive with the others). `--base` overrides the
 local-mode base branch (default: auto-detected parent or `main`); `--type` defaults to
 `all`; `--dir` limits scope (local mode only).
+
+`auto` (canonical) or `all` runs autonomously: it removes the confirmation waits in
+Phase 2 (scope) and PR-mode Phase 0 (non-`OPEN` PR state), never the verification --
+every hard limit, round cap, push guard, and the `INTENT_VERIFY` default are unchanged.
+Ambiguity that would otherwise prompt the user (no resolvable base branch, a non-`OPEN`
+PR) becomes a hard stop instead of a wait: re-run with `--base <branch>` or resolve the
+PR state first. Without `auto`/`all`, the skill behaves exactly as documented below.
 
 ## Mode router
 
@@ -55,4 +62,4 @@ integrations live in `references/toolbox.md`; load it at Phase 1/1'.
 bash lib/smoke.sh
 ```
 
-S1-S12 must pass (coverage detail in `references/toolbox.md`).
+S1-S15 must pass (coverage detail in `references/toolbox.md`).

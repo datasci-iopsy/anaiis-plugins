@@ -1,6 +1,6 @@
-# anaiis-coderabbit: PR Mode Phase Detail
+# rabbit-sweep: PR Mode Phase Detail
 
-Applies when invoked as `/anaiis-coderabbit --pr <N>`. Replaces Phases 1-3 of local mode.
+Applies when invoked as `/anaiis-review:rabbit-sweep --pr <N>`. Replaces Phases 1-3 of local mode.
 Phases 4-6 (triage, verify, commit) run verbatim from `phases.md`.
 
 ---
@@ -15,7 +15,9 @@ gh pr view <N> --json headRefName,headRefOid,state
 Hard stops:
 - `<N>` is not a positive integer: exit with error.
 - `gh auth status` fails: stop. Tell the user to run `gh auth login`.
-- PR state is not `OPEN`: warn user; confirm before proceeding.
+- PR state is not `OPEN`:
+  - **Without `auto`/`all`:** warn the user; confirm before proceeding.
+  - **With `auto`/`all`:** hard stop. Print the PR state and exit non-zero; do not proceed against a closed or merged PR unattended.
 - Local branch does not match PR `headRefName`: hard stop. Tell the user to check out the PR branch first.
 
 Print resolved context:
@@ -33,10 +35,13 @@ Export `REPO`, `PR_NUM`, `PR_BRANCH` for use in subsequent phases.
 
 ## Phase 1': Preflight (PR mode)
 
-Same hard stops as local mode Phase 1:
-- Not in a git repo: exit.
-- On `main` or `master`: stop.
-- Unrecognized branch pattern: warn and confirm.
+Run the shared branch guard, same as local mode Phase 1:
+
+```bash
+bash lib/branch-guard.sh
+```
+
+On non-zero exit, relay its stderr message verbatim and stop.
 
 Skip the `coderabbit auth` check (not needed for PR mode). `gh auth` was already verified in Phase 0.
 
@@ -54,14 +59,14 @@ ledger_init "$PR_BRANCH" "PR-${PR_NUM}" "pr"
 Fetch raw comments:
 
 ```bash
-FETCH_OUT=~/.claude/anaiis-coderabbit/runs/pr-${PR_NUM}
+FETCH_OUT=~/.claude/rabbit-sweep/runs/pr-${PR_NUM}
 bash lib/fetch-pr-findings.sh "$REPO" "$PR_NUM" "$FETCH_OUT"
 ```
 
 Normalize to NDJSON:
 
 ```bash
-REVIEW_OUT=~/.claude/anaiis-coderabbit/runs/review-latest.ndjson
+REVIEW_OUT=~/.claude/rabbit-sweep/runs/review-latest.ndjson
 uv run lib/parse-pr-comments.py "$PR_NUM" \
     "${FETCH_OUT}/pr-inline.json" \
     "${FETCH_OUT}/pr-summary.json" \
@@ -84,14 +89,14 @@ humans did.
 Load handled IDs from prior ledgers for this PR:
 
 ```bash
-source lib/ledger.sh
+source lib/ledger.sh && ledger_resume
 HANDLED=$(ledger_handled_ids "$PR_NUM")
 ```
 
 Filter `$REVIEW_OUT` to new findings only:
 
 ```bash
-NEW_OUT=~/.claude/anaiis-coderabbit/runs/review-new.ndjson
+NEW_OUT=~/.claude/rabbit-sweep/runs/review-new.ndjson
 while IFS= read -r line; do
     id=$(printf '%s' "$line" | jq -r '.id')
     if ! printf '%s\n' "$HANDLED" | grep -qxF "$id"; then
@@ -120,7 +125,7 @@ fi
 Drop findings whose comment sits in a resolved or outdated thread:
 
 ```bash
-FINAL_OUT=~/.claude/anaiis-coderabbit/runs/review-active.ndjson
+FINAL_OUT=~/.claude/rabbit-sweep/runs/review-active.ndjson
 while IFS= read -r line; do
     id=$(printf '%s' "$line" | jq -r '.id')
     cid="${id##*-}"
@@ -201,18 +206,30 @@ fi
 Print what is being pushed, then push:
 
 ```bash
-PENDING=$(git log "origin/${BRANCH}..HEAD" --oneline 2>/dev/null)
+if git rev-parse --verify -q "origin/${BRANCH}" >/dev/null; then
+    PENDING=$(git log "origin/${BRANCH}..HEAD" --oneline)
+else
+    PENDING=$(git log HEAD --not --remotes --oneline)
+    printf '\nNo origin/%s ref found (branch not yet pushed).\n' "$BRANCH"
+fi
+
+PUSHED=false
+PUSH_FAILED=false
 if [ -n "$PENDING" ]; then
     COUNT=$(printf '%s\n' "$PENDING" | wc -l | tr -d ' ')
     printf '\nPushing %s commit(s) to origin/%s:\n' "$COUNT" "$BRANCH"
     printf '%s\n' "$PENDING"
-    git push origin "$BRANCH"
+    if git push origin "$BRANCH"; then
+        PUSHED=true
+    else
+        PUSH_FAILED=true
+    fi
 else
     printf '\nNo commits to push (already up to date).\n'
 fi
 ```
 
-If `git push` fails: print the error, note that commits remain local, and continue to the exit summary. Do not abort.
+If `git push` fails, `PUSH_FAILED` is set to `true` and the exit summary reports it instead of claiming success. Do not abort; continue to the exit summary.
 
 ### Exit summary
 
@@ -221,11 +238,24 @@ PR mode complete.
   Fixed and committed: <N>
   Skipped (1-2):       <N>
   Reverted (fail):     <N>
-
-Pushed to origin/<branch>. CodeRabbit bot will re-review shortly.
-When the bot posts new comments, run:
-  /anaiis-coderabbit --pr <N>
+  Fixed without tests: <N>  (no_tests events; verified by intent check only)
 ```
+
+Then one of, based on `$PUSHED` / `$PUSH_FAILED` / `$PENDING`:
+- `$PUSHED = true`:
+  ```text
+  Pushed to origin/<branch>. CodeRabbit bot will re-review shortly.
+  When the bot posts new comments, run:
+    /anaiis-review:rabbit-sweep --pr <N>
+  ```
+- `$PUSH_FAILED = true`:
+  ```text
+  Push to origin/<branch> failed. Commits remain local; run `git push origin <branch>` manually, then re-run this skill.
+  ```
+- otherwise (`$PENDING` empty, nothing to push):
+  ```text
+  No new commits to push this session.
+  ```
 
 Do not open or modify the PR. Exit.
 
@@ -240,5 +270,5 @@ Do not open or modify the PR. Exit.
 | No bot comments yet | Wait for CodeRabbit CI to finish, then re-run |
 | parse-pr-comments.py fails | Check `uv` is available; run `uv run lib/parse-pr-comments.py --help` |
 | fetch-thread-state.sh fails | Non-fatal: Phase 3' warns and falls back to ledger-only filtering; findings resolved manually on GitHub may be re-triaged that run |
-| All findings already handled | Nothing to do; push runs automatically at exit |
+| All findings already handled | Nothing to do; Phase 3' exits before Phase 7' (push) runs, so nothing is pushed |
 | Push fails | Commits remain local; run `git push origin <branch>` manually |

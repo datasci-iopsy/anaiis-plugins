@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
-# Shared ledger helpers for anaiis-coderabbit.
+# Shared ledger helpers for rabbit-sweep.
 # Source this file; do not execute directly.
 # All functions write to $LEDGER (must be set by caller).
 
-LEDGER_DIR="${HOME}/.claude/anaiis-coderabbit/runs"
+LEDGER_DIR="${HOME}/.claude/rabbit-sweep/runs"
+# One-time migration from the pre-rename location; preserves run history
+# and PR-mode idempotency (ledger_handled_ids scans this directory).
+if [ -d "${HOME}/.claude/anaiis-coderabbit" ] && [ ! -e "${HOME}/.claude/rabbit-sweep" ]; then
+	mv "${HOME}/.claude/anaiis-coderabbit" "${HOME}/.claude/rabbit-sweep" 2>/dev/null || [ -d "${HOME}/.claude/rabbit-sweep" ]
+fi
 
 ledger_init() {
 	local branch="$1" base="$2" mode="$3"
 	mkdir -p "$LEDGER_DIR"
 	local iso
 	iso=$(date -u +%Y%m%dT%H%M%SZ)
-	local safe_branch="${branch//\//-}"
+	local safe_branch
+	safe_branch=$(printf '%s' "$branch" | { command -v sha1sum >/dev/null 2>&1 && sha1sum || shasum; } | cut -d' ' -f1)
 	local suffix=0 candidate
 	while :; do
 		candidate="${LEDGER_DIR}/${safe_branch}-${iso}${suffix:+-${suffix}}.jsonl"
@@ -26,13 +32,50 @@ ledger_init() {
 	jq -nc --arg branch "$branch" --arg base "$base" --arg mode "$mode" --arg ts "$iso" \
 		'{event:"review_started", branch:$branch, base:$base, mode:$mode, ts:$ts}' >>"$LEDGER"
 	export LEDGER
+	# Pointer file (no .jsonl suffix, so ledger_handled_ids never scans it):
+	# lets a later, separate shell process re-resolve $LEDGER for this branch
+	# via ledger_resume, since exported vars do not survive across the Bash
+	# tool's separate process invocations.
+	printf '%s' "$LEDGER" >"${LEDGER_DIR}/.current-${safe_branch}"
+}
+
+# Re-resolves $LEDGER in a shell process that did not run ledger_init itself.
+# Usage: ledger_resume [branch]  (defaults to the current git branch)
+ledger_resume() {
+	local branch="${1:-$(git branch --show-current 2>/dev/null)}"
+	local safe_branch
+	safe_branch=$(printf '%s' "$branch" | { command -v sha1sum >/dev/null 2>&1 && sha1sum || shasum; } | cut -d' ' -f1)
+	local pointer="${LEDGER_DIR}/.current-${safe_branch}"
+	if [ ! -f "$pointer" ]; then
+		printf 'ledger_resume: no ledger pointer for branch "%s" -- run ledger_init first\n' "$branch" >&2
+		return 1
+	fi
+	LEDGER=$(<"$pointer")
+	if [ ! -f "$LEDGER" ]; then
+		printf 'ledger_resume: pointer names "%s" but that ledger file does not exist\n' "$LEDGER" >&2
+		return 1
+	fi
+	export LEDGER
+}
+
+# Refuses to proceed if $LEDGER is unset/empty, instead of blind-appending to
+# a variable that a fresh shell process never inherited (issue: exported vars
+# from ledger_init do not persist across separate Bash tool calls).
+_ledger_require() {
+	if [ -n "${LEDGER:-}" ]; then
+		return 0
+	fi
+	printf 'ledger.sh: $LEDGER is unset in this shell -- run: source lib/ledger.sh && ledger_resume\n' >&2
+	return 1
 }
 
 ledger_append() {
+	_ledger_require || return 1
 	printf '%s\n' "$1" >>"$LEDGER"
 }
 
 _ledger_event() {
+	_ledger_require || return 1
 	jq -nc "$@" >>"$LEDGER"
 }
 
@@ -61,6 +104,14 @@ ledger_decision() {
 ledger_verified() {
 	local id="$1"
 	_ledger_event --arg id "$id" '{event:"verified", id:$id}'
+}
+
+# Records that this finding's fix was committed with no test suite detected
+# (detect-tests.sh returned "none"); verification relied on the intent check
+# alone. Logged alongside ledger_verified, not instead of it.
+ledger_no_tests() {
+	local id="$1"
+	_ledger_event --arg id "$id" '{event:"no_tests", id:$id}'
 }
 
 ledger_verify_failed() {
@@ -164,8 +215,12 @@ ledger_intent_failed() {
 ledger_handled_ids() {
 	local pr="$1"
 	local pattern="PR-${pr}-"
-	[ -d "$LEDGER_DIR" ] || return 0
-	find "$LEDGER_DIR" -name "*.jsonl" -exec sh -c \
+	local legacy_dir="${HOME}/.claude/anaiis-coderabbit/runs"
+	local -a dirs=()
+	[ -d "$LEDGER_DIR" ] && dirs+=("$LEDGER_DIR")
+	[ -d "$legacy_dir" ] && dirs+=("$legacy_dir")
+	[ ${#dirs[@]} -eq 0 ] && return 0
+	find "${dirs[@]}" -name "*.jsonl" -exec sh -c \
 		'for file do cat "$file"; printf "\n"; done' sh {} + 2>/dev/null \
 		| jq -rR --arg pat "$pattern" \
 			'fromjson? // empty

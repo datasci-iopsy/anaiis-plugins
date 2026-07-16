@@ -100,6 +100,7 @@ into place. Exit code:
 | 32 | group commit failed mid-reconstruction | stop; show the commit output verbatim; the tag and tmp branch are preserved; ask the user: fix and retry, skip a failing hook with explicit `--no-verify` approval, or abort via the recovery command in stderr |
 | 33 | non-empty diff after reconstruction | stop; show the diff; the tag and tmp branch are preserved; do NOT proceed; offer the recovery command in stderr |
 | 34 | same file path assigned to more than one group in plan.json | stop; show the duplicated path(s) and group indices from stderr; no destructive action was taken; ask the user or re-run planning to fix `plan.json` |
+| 36 | plan.json omits a path that changed between fork and head (most commonly one side of a rename whose file already existed before the branch) | stop; show the missing path(s) from stderr; no destructive action was taken; ask the user or re-run planning to add the missing path(s) to `plan.json` |
 
 ---
 
@@ -150,4 +151,5 @@ action.
 | Commit failure during group commit (exit 32) | Fix / skip (with explicit approval) / abort via the printed recovery command |
 | Tree verification fails (exit 33) | `git checkout <branch> && git reset --hard safety/pre-rebase-<branch> && git branch -D tmp/rebase-<branch>` |
 | Duplicate file across groups (exit 34) | Fix `plan.json` (or re-run planning) so each file appears in exactly one group, then re-run |
+| plan.json omits a changed path (exit 36) | Add the missing path(s) to the appropriate group in `plan.json` (or re-run planning), then re-run. Common cause: a rename of a file that already existed before the branch -- both the old and new path must be covered |
 | Process interrupted mid-execute | Same revert command as above; the safety tag always survives until the user deletes it |

@@ -53,9 +53,15 @@ for sha in $shas; do
 		path="${rest#*$'\t'}"
 		if [ -z "$path" ]; then
 			# Rename/copy record: path field was empty, so the next two NUL-delimited
-			# tokens are the old path (discard) and the new/destination path (use it).
-			IFS= read -r -d '' _old_path
+			# tokens are the old path and the new/destination path. Record BOTH:
+			# apply-plan.sh's per-file reconstruction only removes a path if it
+			# appears in some group's files list and is absent at head_sha, so
+			# dropping the old path here left it stranded in the reconstructed
+			# tree whenever it already existed at fork_sha (a rename of a file
+			# that predates the branch), failing tree verification (exit 33).
+			IFS= read -r -d '' old_path
 			IFS= read -r -d '' path
+			files_json=$(jq -c --argjson f "$files_json" --arg file "$old_path" -n '$f + [$file]')
 		fi
 		files_json=$(jq -c --argjson f "$files_json" --arg file "$path" -n '$f + [$file]')
 		[ "$ins" != "-" ] && ins_total=$((ins_total + ins))

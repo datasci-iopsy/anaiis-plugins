@@ -1,22 +1,21 @@
-# anaiis-coderabbit: Phase Detail
+# rabbit-sweep: Phase Detail
 
 ## Phase 1: Preflight (read-only, hard stops before any review runs)
 
-Run as a single chained Bash call:
+Run the shared branch guard, then check the working tree:
 
 ```bash
-git status --porcelain && git branch --show-current && git rev-parse --show-toplevel
+bash lib/branch-guard.sh && git status --porcelain && git rev-parse --show-toplevel
 ```
 
 **Hard stops -- do not proceed if:**
 
-- **Not in a git repo:** exit with error.
-- **On `main` or `master`:** stop. Tell the user to create a branch first. Remind them of the `coderabbit/<topic>` convention from `rules/git.md`. Do not bypass.
-- **Branch does not match `claude/*`, `coderabbit/*`, or a user feature-branch pattern (`feat/*`, `fix/*`, `hotfix/*`, `chore/*`):** warn, confirm with user before continuing.
+- `lib/branch-guard.sh` exits non-zero: relay its stderr message verbatim and stop. It refuses on a non-git directory, detached HEAD, or `main`/`master`, pointing at `claude-<category>/<short-description>` from `rules/git.md`. Any other named branch is authoritative; there is no branch-pattern allowlist and no warn-and-confirm step.
 
 Check auth:
 
 ```bash
+set -o pipefail
 coderabbit auth status --agent | jq -e '.authenticated == true'
 ```
 
@@ -33,7 +32,9 @@ Determine the base for the review:
    ```bash
    git log --oneline --simplify-by-decoration --decorate=short HEAD~20 | head -5
    ```
-   Use the first ref that differs from the current branch and matches `main`, `master`, or a user feature-branch pattern. If ambiguous, ask the user.
+   Use the first ref that differs from the current branch and matches `main`, `master`, or a user feature-branch pattern. If ambiguous:
+   - **Without `auto`/`all`:** ask the user.
+   - **With `auto`/`all`:** hard stop -- never guess a base. Print: `Base branch is ambiguous; re-run with --base <branch>.` and exit non-zero.
 
 Resolve and print the review scope before running:
 
@@ -47,7 +48,8 @@ Review scope:
 Confirm to proceed? (CodeRabbit reviews typically take 7-30+ minutes depending on scope -- see docs.coderabbit.ai/cli/claude-code-integration)
 ```
 
-Wait for user confirmation.
+**Without `auto`/`all`:** wait for user confirmation.
+**With `auto`/`all`:** the block above is printed as evidence, not a prompt; proceed immediately without waiting.
 
 ---
 
@@ -62,13 +64,27 @@ BRANCH=$(git branch --show-current)
 ledger_init "$BRANCH" "$BASE" "local"
 ```
 
+**Ledger persistence across phases:** this environment's Bash tool does not persist
+exported variables (including `$LEDGER`) between separate tool calls; only the working
+directory carries over. Every Bash call from here through Phase 7 that invokes a
+`ledger_*` function must begin, in that same call, with:
+
+```bash
+source lib/ledger.sh && ledger_resume
+```
+
+The snippets below show only the ledger call itself for brevity; prepend the line above
+whenever it has not already run earlier in the same Bash call. If it is missing,
+`_ledger_require` (in `ledger.sh`) refuses the call loudly rather than silently dropping
+the event -- that refusal means this preamble was skipped, not that the event is optional.
+
 Run Round 1 via `lib/review-round.sh`, which wraps `lib/run-review.sh` with a deterministic
 30-minute timeout (CodeRabbit's documented reviews take 7-30+ minutes) and one free retry on
 a timeout (full contract documented in Phase 7's "Round tracking"):
 
 ```bash
-REVIEW_OUT=~/.claude/anaiis-coderabbit/runs/review-latest.ndjson
-REVIEW_ERR=~/.claude/anaiis-coderabbit/runs/review-latest.err
+REVIEW_OUT=~/.claude/rabbit-sweep/runs/review-latest.ndjson
+REVIEW_ERR=~/.claude/rabbit-sweep/runs/review-latest.err
 bash lib/review-round.sh "$BASE" [--type <type>] [--dir <dir>] > "$REVIEW_OUT" 2> "$REVIEW_ERR"
 EXIT_CODE=$?
 ```
@@ -76,6 +92,7 @@ EXIT_CODE=$?
 **If `EXIT_CODE` is 0 or 20** (result obtained; 20 means the free retry was used): count
 Round 1:
 ```bash
+source lib/ledger.sh && ledger_resume
 ROUND=1
 ledger_round_start 1
 ```
@@ -89,7 +106,7 @@ If the output is empty or contains no findings: report "No findings. Branch is c
 ```
 Review incomplete: CodeRabbit CLI timed out twice (initial + free retry).
 No fixes attempted this session -- nothing to commit or push.
-Re-run /anaiis-coderabbit to try again.
+Re-run /anaiis-review:rabbit-sweep to try again.
 ```
 Exit non-zero. Do not proceed to triage.
 
@@ -105,6 +122,7 @@ For each finding, in severity order (highest first), apply the rubric:
 - Do not edit.
 - Log the skip:
   ```bash
+  source lib/ledger.sh && ledger_resume
   ledger_skip "<id>" <n> "<rationale>"
   ```
 - Print: `SKIP [<id>] <title> -- <rationale>`
@@ -115,6 +133,7 @@ For each finding, in severity order (highest first), apply the rubric:
 - Spawn `Agent(subagent_type="coderabbit-triage", description="Triage CR-<id>: <title>")` with the finding body, file, line, and suggested_fix. The agent returns a single-line JSON verdict: `{"decision": "skip|fix", "rationale": "<one sentence>"}`.
 - Use that verdict for the decision. Log it, marking `requires_verify=true` when the verdict is `fix` (this decision came from `coderabbit-triage`, a judgment call, so Phase 5 must obtain a passing intent-verifier result before it can be marked done):
   ```bash
+  source lib/ledger.sh && ledger_resume
   ledger_decision "<id>" 3 "<decision>" "<rationale>" true
   ```
   A `skip` verdict never reaches Phase 5's verification step, so `requires_verify` is moot for it; omit the 5th arg (`ledger_decision "<id>" 3 "skip" "<rationale>"`).
@@ -126,11 +145,17 @@ For each finding, in severity order (highest first), apply the rubric:
 **Severity 4-5 (real defect / clear improvement):**
 - Log decision fix immediately, no extra reasoning. `requires_verify=true`: all sev 4-5 fixes need the intent-verifier in Phase 5.
   ```bash
+  source lib/ledger.sh && ledger_resume
   ledger_decision "<id>" <n> "fix" "severity <n>: fix without triage" true
   ```
 - Proceed to surgeon spawn.
 
 **Surgeon spawn (for all `fix` decisions):**
+
+Before spawning, snapshot any pre-existing uncommitted diff on the finding's file so a later revert-on-failure (Phase 5) restores only the surgeon's change, not the user's prior edits:
+```bash
+PRE_SURGEON_DIFF=$(git diff -- "<finding.file>")
+```
 
 Spawn an Agent with:
 - `subagent_type`: `code-surgeon`
@@ -167,19 +192,31 @@ fi
 ```
 
 This script prints the test command(s) for the project, one per line, or `none` if no test suite is detected. Run each command. If any command exits non-zero:
-- Revert the fix: `git restore <file>`
-- Log: `ledger_verify_failed "<id>" "<file>" "<short summary of failure>"`
+- Revert the fix, restoring only the surgeon's change: `git restore <file>`, then if `$PRE_SURGEON_DIFF` is non-empty, reapply it (`printf '%s' "$PRE_SURGEON_DIFF" | git apply`) so pre-existing uncommitted edits to the same file survive.
+- Log:
+  ```bash
+  source lib/ledger.sh && ledger_resume
+  ledger_verify_failed "<id>" "<file>" "<short summary of failure>"
+  ```
 - Print: `REVERTED [<id>] <title> -- tests failed: <failure summary>`
 - Do not commit this finding. Continue to the next finding.
 
-If tests pass (or `none` returned): log `ledger_verified "<id>"` (intermediate: tests passed, intent check pending), then run the deterministic preflight:
+If tests pass: log `ledger_verified` (intermediate: tests passed, intent check pending), then run the deterministic preflight.
+
+If `none` was returned (no test suite detected): print `WARNING [<id>]: no test suite detected (detect-tests.sh); verification relies on intent check only`, log `ledger_no_tests` alongside `ledger_verified`, then run the same deterministic preflight -- the intent check is the only verification this finding gets, so it still runs.
 
 ```bash
+source lib/ledger.sh && ledger_resume
+ledger_verified "<id>"
+# If detect-tests.sh returned "none" for this fix, also:
+# ledger_no_tests "<id>"
+
 preflight_reason=""
 if ! preflight_reason=$(INTENT_PREFLIGHT_SUGGESTED_FIX="<finding.suggested_fix>" \
     bash lib/intent-preflight.sh "<finding.file>" <line_start> <line_end> 2>&1); then
     ledger_intent_failed "<id>" "<finding.file>" "$preflight_reason"
     git restore "<finding.file>"
+    [ -n "$PRE_SURGEON_DIFF" ] && printf '%s' "$PRE_SURGEON_DIFF" | git apply
     # Print: REVERTED [<id>] <title> -- preflight failed: <preflight_reason>
     # Continue to next finding.
 fi
@@ -191,8 +228,8 @@ fi
 
 Pick exactly one branch:
 
-- **(a) Surgeon returned `Already resolved:`**: skip the preflight block above entirely for this outcome. Log `ledger_already_resolved "<id>"`, then go to the final step.
-- **(b) Surgeon returned `Blocked:`**: stop here. No `verified`, `already_resolved`, or `intent_verified` event. Do not proceed further for this finding.
+- **(a) Surgeon returned `Already resolved:`**: skip the preflight block above entirely for this outcome. If the surgeon nonetheless left an uncommitted change on the file, revert it the same scoped way (`git restore <file>`, then reapply `$PRE_SURGEON_DIFF` if non-empty). Log (`source lib/ledger.sh && ledger_resume` first if not already run this call) `ledger_already_resolved "<id>"`, then go to the final step.
+- **(b) Surgeon returned `Blocked:`**: revert any uncommitted change the surgeon left on the file the same scoped way (`git restore <file>`, then reapply `$PRE_SURGEON_DIFF` if non-empty), then stop here. No `verified`, `already_resolved`, or `intent_verified` event. Do not proceed further for this finding.
 - **(c) This finding's `decision` event has `requires_verify: false`** (a mechanical sev-3 fix that never spawned `coderabbit-triage`): nothing further required. Go to the final step.
 - **(d) This finding's `decision` event has `requires_verify: true`** (sev 4-5, or sev 3 decided by `coderabbit-triage`): spawn the verifier now -- see "Verifier spawn" below -- before doing anything else.
 
@@ -206,15 +243,17 @@ Spawn an Agent with:
 The agent returns one line of JSON: `{"intent_met": <true|false>, "rationale": "<one sentence>"}`. Log the raw verdict immediately, before acting on it:
 
 ```bash
+source lib/ledger.sh && ledger_resume
 ledger_verifier_result "<id>" <intent_met> "<rationale>"
 ```
 
-- If `intent_met: false`: log `ledger_intent_failed "<id>" "<file>" "<rationale>"`, revert `git restore "<file>"`, print `REVERTED [<id>] <title> -- intent failed: <rationale>`, and continue to the next finding. Do not proceed to the final step.
+- If `intent_met: false`: log `ledger_intent_failed "<id>" "<file>" "<rationale>"` (same call as above, or `source lib/ledger.sh && ledger_resume` first if this is a new Bash call), revert only the surgeon's change (`git restore "<file>"`, then reapply `$PRE_SURGEON_DIFF` if non-empty via `printf '%s' "$PRE_SURGEON_DIFF" | git apply`), print `REVERTED [<id>] <title> -- intent failed: <rationale>`, and continue to the next finding. Do not proceed to the final step.
 - If `intent_met: true`: proceed to the final step.
 
 **Final step (reached from branch (a), (c), or a passing verifier in (d) only):**
 
 ```bash
+source lib/ledger.sh && ledger_resume
 ledger_intent_verified "<id>"
 ```
 
@@ -225,6 +264,7 @@ This call is guarded: it refuses (non-zero exit, no event written, stderr messag
 If a real run reverts more than ~30% of legitimate fixes, or an adopter reports the 3-round cap hitting on routine work, wrap the verifier spawn in an env-var guard. The bypass must still satisfy `ledger_intent_verified`'s guard, so it logs a `verifier_result` explaining the bypass rather than calling `ledger_intent_verified` directly:
 
 ```bash
+source lib/ledger.sh && ledger_resume
 if [[ "${INTENT_VERIFY:-1}" == "1" ]]; then
     # ... preflight + verifier spawn (branch (d) above) ...
 else
@@ -283,8 +323,8 @@ a result -- see the outcomes under "Re-review".
 
 ```bash
 printf '\n[Round %s/3] Running local review against %s...  (typically 7-30+ min)\n' "$NEXT_ROUND" "$BASE"
-REVIEW_RECHECK=~/.claude/anaiis-coderabbit/runs/review-recheck-${NEXT_ROUND}.ndjson
-REVIEW_ERR=~/.claude/anaiis-coderabbit/runs/review-recheck-${NEXT_ROUND}.err
+REVIEW_RECHECK=~/.claude/rabbit-sweep/runs/review-recheck-${NEXT_ROUND}.ndjson
+REVIEW_ERR=~/.claude/rabbit-sweep/runs/review-recheck-${NEXT_ROUND}.err
 bash lib/review-round.sh "$BASE" [--type <type>] [--dir <dir>] \
     > "$REVIEW_RECHECK" 2> "$REVIEW_ERR"
 EXIT_CODE=$?
@@ -298,6 +338,7 @@ otherwise.
 
 **If `EXIT_CODE` is 0 or 20** (result obtained): commit to this round:
 ```bash
+source lib/ledger.sh && ledger_resume
 ROUND="$NEXT_ROUND"
 ledger_round_start "$ROUND"
 ```
@@ -355,7 +396,11 @@ fi
 Print what is about to be pushed, then push:
 
 ```bash
-PENDING=$(git log "origin/${BRANCH}..HEAD" --oneline 2>/dev/null)
+if git rev-parse --verify -q "origin/${BRANCH}" >/dev/null; then
+    PENDING=$(git log "origin/${BRANCH}..HEAD" --oneline)
+else
+    PENDING=$(git log "$BASE"..HEAD --oneline)
+fi
 if [ -n "$PENDING" ]; then
     COUNT=$(printf '%s\n' "$PENDING" | wc -l | tr -d ' ')
     printf '\nPushing %s commit(s) to origin/%s:\n' "$COUNT" "$BRANCH"
@@ -380,6 +425,7 @@ CodeRabbit triage complete.
   Skipped (sev 1-2):                <total>
   Reverted (verify fail):           <total>
   Reverted (intent fail):           <total>  (<N of M> were sev-3 judgment findings)
+  Fixed without test coverage:      <count>  (no_tests events; verified by intent check only)
 
 Next steps:
   /anaiis-git-ops:rebase      -- consolidate commits into logical groups
@@ -397,12 +443,13 @@ CodeRabbit triage complete (stalled).
   Skipped (sev 1-2):                <total>
   Reverted (verify fail):           <total>
   Reverted (intent fail):           <total>  (<N of M> were sev-3 judgment findings)
+  Fixed without test coverage:      <count>  (no_tests events; verified by intent check only)
   Still open:                       <count>
 
 Open findings:
   [<id>] sev=<N>  <file>:<line>  <title>
 
-Address open findings manually, then re-run /anaiis-coderabbit.
+Address open findings manually, then re-run /anaiis-review:rabbit-sweep.
 ```
 
 **Round cap** (3 rounds exhausted, findings remain):
@@ -415,12 +462,13 @@ CodeRabbit triage complete (cap reached).
   Skipped (sev 1-2):                <total>
   Reverted (verify fail):           <total>
   Reverted (intent fail):           <total>  (<N of M> were sev-3 judgment findings)
+  Fixed without test coverage:      <count>  (no_tests events; verified by intent check only)
   Still open:                       <count>
 
 Open findings:
   [<id>] sev=<N>  <file>:<line>  <title>
 
-Re-run /anaiis-coderabbit in a new session to continue.
+Re-run /anaiis-review:rabbit-sweep in a new session to continue.
 ```
 
 **Review incomplete** (CodeRabbit CLI unreachable: both the initial attempt and the free
@@ -434,10 +482,11 @@ CodeRabbit triage incomplete (review unavailable).
   Skipped (sev 1-2):                <total>
   Reverted (verify fail):           <total>
   Reverted (intent fail):           <total>  (<N of M> were sev-3 judgment findings)
+  Fixed without test coverage:      <count>  (no_tests events; verified by intent check only)
   Committed fixes pushed:           <yes|no>
 
 Branch was NOT verified clean -- the review that would confirm it could not run.
-Re-run /anaiis-coderabbit to finish.
+Re-run /anaiis-review:rabbit-sweep to finish.
 ```
 The header `[Round N]` uses `$NEXT_ROUND` (the round that failed to run); `Rounds run` uses
 `$ROUND` (rounds successfully completed before this one).
@@ -450,13 +499,13 @@ Skill exits. It does not auto-chain into the next skill.
 
 | Failure | Recovery |
 |---|---|
-| Not authenticated | `coderabbit auth login`, then re-run `/anaiis-coderabbit` |
-| On `main` | Create a branch (`git checkout -b coderabbit/<topic>`), then re-run |
+| Not authenticated | `coderabbit auth login`, then re-run `/anaiis-review:rabbit-sweep` |
+| On `main` | Create a branch (`git checkout -b claude-<category>/<short-description>`), then re-run |
 | Review command fails | Show tail of output; check auth or CLI version with `coderabbit --version` |
 | Review times out once (review-round.sh retries automatically) | No action needed -- the free retry is transparent; only visible in the ledger as `round_timeout: recovered` |
-| Review times out twice in a row (review-round.sh exit 21) | Genuine CLI/network outage; any commits made so far had a push attempted (outcome reported per push-failure policy), branch not verified clean; wait and re-run `/anaiis-coderabbit` |
+| Review times out twice in a row (review-round.sh exit 21) | Genuine CLI/network outage; any commits made so far had a push attempted (outcome reported per push-failure policy), branch not verified clean; wait and re-run `/anaiis-review:rabbit-sweep` |
 | Surgeon blocked (callers need attention) | Fix callers manually or in a follow-up commit, then re-run the skill |
 | All findings skipped or reverted | Report and exit cleanly; nothing to commit |
 | Stall after round N | Fix open findings manually; re-run in a new session |
-| Round cap hit | Re-run `/anaiis-coderabbit` in a new session to pick up remaining findings |
+| Round cap hit | Re-run `/anaiis-review:rabbit-sweep` in a new session to pick up remaining findings |
 | Push fails | Commits remain local; run `git push origin <branch>` manually |

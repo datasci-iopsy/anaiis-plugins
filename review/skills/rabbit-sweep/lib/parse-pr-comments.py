@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Normalize raw CodeRabbit PR comments to the anaiis-coderabbit finding NDJSON schema.
+Normalize raw CodeRabbit PR comments to the rabbit-sweep finding NDJSON schema.
 
 Usage:
     uv run parse-pr-comments.py <pr_number> <inline_json> <summary_json> <out_ndjson>

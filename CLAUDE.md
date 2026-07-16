@@ -49,7 +49,7 @@ a `lib/` script, not duplicated across SKILL.md files.
 
 When a skill grows logic that can fail silently (parsers, normalizers, ledger writers,
 multi-step transforms with branching state), write fixture-based tests in `lib/smoke.sh`
-before or alongside the code. `anaiis-coderabbit` is the canonical example of a fully
+before or alongside the code. `rabbit-sweep` is the canonical example of a fully
 tested expanded skill.
 
 ### Simplicity first
@@ -66,7 +66,7 @@ when a trigger condition is met (see below).
 | Layout | One `SKILL.md`, prose only | `SKILL.md` + `references/`, `lib/`, optional `agents/` |
 | When to use | Procedural workflow, no scripts, no deterministic logic to test | Scripts, deterministic transforms, multi-phase flow, or shared logic |
 | Tests | None | `lib/smoke.sh` with fixture-based checks |
-| Working example | `changelog`, `anaiis-copyedit` | `anaiis-coderabbit` |
+| Working example | `changelog`, `anaiis-copyedit` | `rabbit-sweep` |
 
 ### Decision tree: when to promote flat to expanded
 

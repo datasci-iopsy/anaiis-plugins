@@ -79,13 +79,13 @@ jq -c 'select(.type == "finding")' "$RAW" \
             else 3 end
         ),
         title: (
-            .codegenInstructions
+            (.codegenInstructions // "")
             | split("\n\n")
             | map(select(startswith("Verify") | not))
             | first // ""
             | split("\n") | first | .[0:120]
         ),
-        body: .codegenInstructions,
+        body: (.codegenInstructions // ""),
         suggested_fix: (if (.suggestions | length) > 0 then .suggestions[0] else null end),
         source: "cli"
     }
