@@ -1,5 +1,6 @@
 # Session planning artifacts (overwritten per task, not versioned)
 tasks/
+spec/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
