@@ -399,7 +399,7 @@ Print what is about to be pushed, then push:
 if git rev-parse --verify -q "origin/${BRANCH}" >/dev/null; then
     PENDING=$(git log "origin/${BRANCH}..HEAD" --oneline)
 else
-    PENDING=$(git log HEAD --oneline)
+    PENDING=$(git log "$BASE"..HEAD --oneline)
 fi
 if [ -n "$PENDING" ]; then
     COUNT=$(printf '%s\n' "$PENDING" | wc -l | tr -d ' ')
