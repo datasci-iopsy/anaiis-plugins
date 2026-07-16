@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke tests for anaiis-coderabbit.
+# Smoke tests for rabbit-sweep.
 # Run from the skill root: bash lib/smoke.sh
 # Exits 0 if all tests pass, non-zero on first failure.
 
@@ -164,7 +164,11 @@ s3() {
 }
 
 # ---------------------------------------------------------------------------
-# S4: fetch-pr-findings.sh offline wiring
+# S4: fetch-pr-findings.sh fixture execution
+# Fully offline: shadows gh on PATH (same seam pattern as S10's
+# fake-coderabbit) with a mock that returns raw GitHub API comment payloads,
+# then runs the real fetcher end to end and normalizes its output with
+# parse-pr-comments.py.
 # ---------------------------------------------------------------------------
 s4() {
 	local fetch="${LIB}/fetch-pr-findings.sh"
@@ -181,21 +185,115 @@ s4() {
 		errors=$((errors + 1))
 	fi
 
-	# Wiring: must call gh api (data source) and parse-pr-comments.py (normalizer)
-	if ! grep -q 'gh api' "$fetch"; then
-		printf '  FAIL S4.2: fetch-pr-findings.sh does not call gh api\n'
+	local raw_pulls="${TMP}/s4-raw-pulls.json"
+	local raw_issues="${TMP}/s4-raw-issues.json"
+	cat >"$raw_pulls" <<'EOF'
+[
+    {
+        "id": 3540349623,
+        "path": "R/analysis.R",
+        "line": 42,
+        "original_line": 42,
+        "body": "_Potential issue_\n\nThe `mean()` call does not pass `na.rm = TRUE`.\n\n```suggestion\nmean(x, na.rm = TRUE)\n```",
+        "diff_hunk": "@@ -40,3 +40,3 @@",
+        "commit_id": "abc123",
+        "user": {"login": "coderabbitai[bot]"}
+    },
+    {
+        "id": 9999999,
+        "path": "R/analysis.R",
+        "line": 10,
+        "original_line": 10,
+        "body": "human review comment, must be filtered out",
+        "diff_hunk": "@@ -8,3 +8,3 @@",
+        "commit_id": "abc123",
+        "user": {"login": "someone-else"}
+    }
+]
+EOF
+	cat >"$raw_issues" <<'EOF'
+[
+    {
+        "id": 4910018180,
+        "body": "## Walkthrough\n\nThis PR adds new analysis functions.",
+        "user": {"login": "coderabbitai[bot]"}
+    },
+    {
+        "id": 4910099999,
+        "body": "human summary comment, must be filtered out",
+        "user": {"login": "human-reviewer"}
+    }
+]
+EOF
+
+	local fakebin="${TMP}/s4-fakebin"
+	mkdir -p "$fakebin"
+	local mock_gh="${fakebin}/gh"
+	cat >"$mock_gh" <<EOF
+#!/usr/bin/env bash
+case "\$1" in
+	auth)
+		exit 0
+		;;
+	api)
+		case "\$2" in
+			*pulls*)
+				cat "$raw_pulls"
+				;;
+			*issues*)
+				cat "$raw_issues"
+				;;
+			*)
+				exit 1
+				;;
+		esac
+		;;
+	*)
+		exit 1
+		;;
+esac
+EOF
+	chmod +x "$mock_gh"
+
+	local out="${TMP}/s4-out"
+	mkdir -p "$out"
+	if ! PATH="${fakebin}:${PATH}" bash "$fetch" "owner/repo" 5 "$out" >/dev/null 2>&1; then
+		printf '  FAIL S4.2: fetch-pr-findings.sh exited non-zero against the mocked gh\n'
 		errors=$((errors + 1))
-	fi
-	# Output contract: must write the files parse-pr-comments.py expects as input
-	for outfile in 'pr-inline.json' 'pr-summary.json'; do
-		if ! grep -q "$outfile" "$fetch"; then
-			printf '  FAIL S4.3: fetch-pr-findings.sh missing output file reference: %s\n' "$outfile"
+	elif [ ! -f "${out}/pr-inline.json" ] || [ ! -f "${out}/pr-summary.json" ]; then
+		printf '  FAIL S4.3: pr-inline.json and/or pr-summary.json were not written\n'
+		errors=$((errors + 1))
+	else
+		local inline_count summary_count
+		inline_count=$(jq 'length' "${out}/pr-inline.json")
+		summary_count=$(jq 'length' "${out}/pr-summary.json")
+		if [ "$inline_count" -ne 1 ]; then
+			printf '  FAIL S4.4: expected 1 bot-authored inline comment (non-bot filtered out), got %s\n' "$inline_count"
 			errors=$((errors + 1))
 		fi
-	done
+		if [ "$summary_count" -ne 1 ]; then
+			printf '  FAIL S4.4: expected 1 bot-authored summary comment (non-bot filtered out), got %s\n' "$summary_count"
+			errors=$((errors + 1))
+		fi
+
+		local ndjson="${TMP}/s4-findings.ndjson"
+		uv run --quiet "${LIB}/parse-pr-comments.py" "5" \
+			"${out}/pr-inline.json" "${out}/pr-summary.json" "$ndjson" 2>/dev/null
+
+		local count
+		count=$(wc -l <"$ndjson" | tr -d ' ')
+		if [ "$count" -ne 2 ]; then
+			printf '  FAIL S4.5: expected 2 normalized findings, got %s\n' "$count"
+			errors=$((errors + 1))
+		fi
+		if ! jq -e 'select(.id == "PR-5-3540349623" and .severity == 4)' "$ndjson" >/dev/null 2>&1; then
+			printf '  FAIL S4.5: expected finding PR-5-3540349623 with severity 4\n'
+			errors=$((errors + 1))
+		fi
+	fi
 
 	if [ "$errors" -eq 0 ]; then
-		pass "S4: fetch-pr-findings.sh syntax valid, wiring to gh api and parse-pr-comments.py confirmed"
+		pass "S4: fetch-pr-findings.sh fixture execution (gh mocked, output written, normalized by parse-pr-comments.py)"
 	else
 		fail "S4: fetch-pr-findings.sh (${errors} checks failed)"
 	fi
@@ -704,13 +802,13 @@ s11() {
 	calls_log="${TMP}/s11-calls-1.log"
 	: >"$calls_log"
 	local mock_ok="${TMP}/mock-gh-ok.sh"
-	cat >"$mock_ok" <<EOF
+	cat >"$mock_ok" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' "\$*" >>"$calls_log"
+printf '%s\n' "$*" >>"${CALLS_LOG:?}"
 exit 0
 EOF
 	chmod +x "$mock_ok"
-	if REPLY_SKIP_GH="$mock_ok" bash "$rs" "owner/repo" 5 "PR-5-3540349623" "pr-inline" 2 "nitpick: stylistic only" >/dev/null 2>&1; then
+	if CALLS_LOG="$calls_log" REPLY_SKIP_GH="$mock_ok" bash "$rs" "owner/repo" 5 "PR-5-3540349623" "pr-inline" 2 "nitpick: stylistic only" >/dev/null 2>&1; then
 		if ! grep -q 'repos/owner/repo/pulls/5/comments/3540349623/replies' "$calls_log"; then
 			printf '  FAIL S11.1: expected reply endpoint with comment id 3540349623 in gh call\n'
 			errors=$((errors + 1))
@@ -731,7 +829,7 @@ EOF
 	# 2. Summary source -> no-op, gh is never invoked
 	calls_log="${TMP}/s11-calls-2.log"
 	rm -f "$calls_log"
-	if REPLY_SKIP_GH="$mock_ok" bash "$rs" "owner/repo" 5 "PR-5-4910018180" "pr-summary" 2 "walkthrough comment" >/dev/null 2>&1; then
+	if CALLS_LOG="$calls_log" REPLY_SKIP_GH="$mock_ok" bash "$rs" "owner/repo" 5 "PR-5-4910018180" "pr-summary" 2 "walkthrough comment" >/dev/null 2>&1; then
 		printf '  FAIL S11.2: expected exit 10 (no-op) for pr-summary source, got 0\n'
 		errors=$((errors + 1))
 	else
@@ -880,9 +978,286 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# S13: branch-guard.sh -- passes on named non-main branches, hard-stops on
+# main, master, and detached HEAD.
+# ---------------------------------------------------------------------------
+s13() {
+	local guard="${LIB}/branch-guard.sh"
+	local repo="${TMP}/s13-repo"
+	local errors=0
+
+	rm -rf "$repo"
+	mkdir -p "$repo"
+	(
+		cd "$repo"
+		git init -q
+		git config user.email "smoke@rabbit-sweep.test"
+		git config user.name "rabbit-sweep smoke"
+		git commit -q --allow-empty -m init
+	)
+
+	# Checkout a branch by name, creating it from the current HEAD only if it
+	# doesn't already exist (git's own default-branch name varies by config).
+	checkout_or_create() {
+		if git -C "$repo" show-ref --verify --quiet "refs/heads/$1"; then
+			git -C "$repo" checkout -q "$1"
+		else
+			git -C "$repo" checkout -q -b "$1"
+		fi
+	}
+
+	# 1. claude-feat/x -> pass, prints branch name
+	checkout_or_create claude-feat/x
+	local out
+	if ! out=$(cd "$repo" && bash "$guard" 2>/dev/null); then
+		printf '  FAIL S13.1: expected pass on claude-feat/x, guard exited non-zero\n'
+		errors=$((errors + 1))
+	elif [ "$out" != "claude-feat/x" ]; then
+		printf '  FAIL S13.1: expected stdout "claude-feat/x", got "%s"\n' "$out"
+		errors=$((errors + 1))
+	fi
+
+	# 2. feat/x (user feature branch) -> pass
+	checkout_or_create feat/x
+	if ! (cd "$repo" && bash "$guard" >/dev/null 2>&1); then
+		printf '  FAIL S13.2: expected pass on feat/x, guard exited non-zero\n'
+		errors=$((errors + 1))
+	fi
+
+	# 3. main -> hard stop
+	checkout_or_create main
+	if (cd "$repo" && bash "$guard" >/dev/null 2>&1); then
+		printf '  FAIL S13.3: expected hard stop on main, guard exited 0\n'
+		errors=$((errors + 1))
+	fi
+
+	# 4. master -> hard stop
+	checkout_or_create master
+	if (cd "$repo" && bash "$guard" >/dev/null 2>&1); then
+		printf '  FAIL S13.4: expected hard stop on master, guard exited 0\n'
+		errors=$((errors + 1))
+	fi
+
+	# 5. detached HEAD -> hard stop
+	local sha
+	sha=$(cd "$repo" && git rev-parse HEAD)
+	(cd "$repo" && git checkout -q "$sha")
+	if (cd "$repo" && bash "$guard" >/dev/null 2>&1); then
+		printf '  FAIL S13.5: expected hard stop on detached HEAD, guard exited 0\n'
+		errors=$((errors + 1))
+	fi
+
+	rm -rf "$repo"
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S13: branch-guard.sh (claude-feat/x, feat/x pass; main, master, detached HEAD hard-stop)"
+	else
+		fail "S13: branch-guard.sh (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# S14: detect-tests.sh -- run-all.sh and Makefile short-circuit detection;
+# non-package testthat dir; existing three detections stay green; empty dir
+# yields "none".
+# ---------------------------------------------------------------------------
+s14() {
+	local detect="${LIB}/detect-tests.sh"
+	local errors=0
+	local d out
+
+	# 1. tests/run-all.sh -> exactly that command, nothing else
+	d="${TMP}/s14-runall"
+	rm -rf "$d"
+	mkdir -p "$d/tests"
+	printf '#!/usr/bin/env bash\n' >"$d/tests/run-all.sh"
+	out=$(bash "$detect" "$d")
+	if [ "$out" != "bash tests/run-all.sh" ]; then
+		printf '  FAIL S14.1: expected only "bash tests/run-all.sh", got:\n%s\n' "$out"
+		errors=$((errors + 1))
+	fi
+
+	# 2. Makefile with a test: target -> "make test"
+	d="${TMP}/s14-makefile"
+	rm -rf "$d"
+	mkdir -p "$d"
+	printf 'test:\n\tpytest\n' >"$d/Makefile"
+	out=$(bash "$detect" "$d")
+	if [ "$out" != "make test" ]; then
+		printf '  FAIL S14.2: expected only "make test", got:\n%s\n' "$out"
+		errors=$((errors + 1))
+	fi
+
+	# 3. tests/testthat/ without DESCRIPTION (non-package R layout)
+	d="${TMP}/s14-testthat"
+	rm -rf "$d"
+	mkdir -p "$d/tests/testthat"
+	out=$(bash "$detect" "$d")
+	if [ "$out" != "Rscript --no-init-file -e \"testthat::test_dir('tests/testthat')\"" ]; then
+		printf '  FAIL S14.3: expected the testthat::test_dir command, got:\n%s\n' "$out"
+		errors=$((errors + 1))
+	fi
+
+	# 4. Empty dir -> "none", exit 0
+	d="${TMP}/s14-empty"
+	rm -rf "$d"
+	mkdir -p "$d"
+	if ! out=$(bash "$detect" "$d"); then
+		printf '  FAIL S14.4: expected exit 0 on an empty dir\n'
+		errors=$((errors + 1))
+	elif [ "$out" != "none" ]; then
+		printf '  FAIL S14.4: expected "none", got:\n%s\n' "$out"
+		errors=$((errors + 1))
+	fi
+
+	# 5. Kept-green: existing three detections still work.
+	d="${TMP}/s14-pytest"
+	rm -rf "$d"
+	mkdir -p "$d/tests"
+	: >"$d/pyproject.toml"
+	: >"$d/uv.lock"
+	out=$(bash "$detect" "$d")
+	if [ "$out" != "uv run pytest" ]; then
+		printf '  FAIL S14.5a: expected "uv run pytest", got:\n%s\n' "$out"
+		errors=$((errors + 1))
+	fi
+
+	d="${TMP}/s14-rpkg"
+	rm -rf "$d"
+	mkdir -p "$d/tests"
+	: >"$d/DESCRIPTION"
+	out=$(bash "$detect" "$d")
+	if [ "$out" != 'Rscript --no-init-file -e "devtools::test()"' ]; then
+		printf '  FAIL S14.5b: expected the devtools::test command, got:\n%s\n' "$out"
+		errors=$((errors + 1))
+	fi
+
+	d="${TMP}/s14-node"
+	rm -rf "$d"
+	mkdir -p "$d"
+	printf '{"scripts":{"test":"jest"}}\n' >"$d/package.json"
+	out=$(bash "$detect" "$d")
+	if [ "$out" != "npm test" ]; then
+		printf '  FAIL S14.5c: expected "npm test", got:\n%s\n' "$out"
+		errors=$((errors + 1))
+	fi
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S14: detect-tests.sh (run-all + Makefile short-circuit, testthat, none, kept-green pytest/R/node)"
+	else
+		fail "S14: detect-tests.sh (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# S15: ledger persistence across separate shell processes -- pointer file +
+# ledger_resume + _ledger_require guard, plus legacy-dir migration continuity.
+# ---------------------------------------------------------------------------
+s15() {
+	local errors=0
+	local test_dir="${TMP}/s15"
+	rm -rf "$test_dir"
+	mkdir -p "$test_dir"
+	local branch="s15-branch"
+
+	# (a) init in one process, resume + append in a second -- one ledger file,
+	# both events present. Exit codes are captured, not asserted here (the
+	# ledger_count/event_count checks below are the actual assertions); this
+	# only keeps a subprocess failure from tripping this script's own `set -e`.
+	if ! bash -c "
+		source '${LIB}/ledger.sh'
+		LEDGER_DIR='${test_dir}'
+		ledger_init '${branch}' 'main' 'local' >/dev/null
+	"; then
+		printf '  FAIL S15.1: ledger_init subprocess exited non-zero\n'
+		errors=$((errors + 1))
+	fi
+	if ! bash -c "
+		source '${LIB}/ledger.sh'
+		LEDGER_DIR='${test_dir}'
+		ledger_resume '${branch}' && ledger_skip 'S15-1' 2 'nitpick'
+	"; then
+		printf '  FAIL S15.1: ledger_resume + ledger_skip subprocess exited non-zero\n'
+		errors=$((errors + 1))
+	fi
+
+	local ledger_count
+	ledger_count=$(find "$test_dir" -maxdepth 1 -name '*.jsonl' | wc -l | tr -d ' ')
+	if [ "$ledger_count" -ne 1 ]; then
+		printf '  FAIL S15.1: expected exactly 1 ledger file across both processes, found %s\n' "$ledger_count"
+		errors=$((errors + 1))
+	else
+		local f event_count
+		f=$(find "$test_dir" -maxdepth 1 -name '*.jsonl')
+		event_count=$(wc -l <"$f" | tr -d ' ')
+		if [ "$event_count" -ne 2 ]; then
+			printf '  FAIL S15.1: expected 2 events (review_started + skip) in the one ledger, got %s\n' "$event_count"
+			errors=$((errors + 1))
+		fi
+	fi
+
+	# (b) a mutator with $LEDGER unset (no ledger_resume call) fails non-zero
+	# and points at ledger_resume rather than blind-appending.
+	local err
+	if err=$(env -u LEDGER bash -c "source '${LIB}/ledger.sh'; ledger_skip 'S15-2' 2 'no ledger set'" 2>&1); then
+		printf '  FAIL S15.2: expected ledger_skip to fail with no $LEDGER set, but it succeeded\n'
+		errors=$((errors + 1))
+	elif ! printf '%s' "$err" | grep -q 'ledger_resume'; then
+		printf '  FAIL S15.2: expected the failure message to mention ledger_resume, got: %s\n' "$err"
+		errors=$((errors + 1))
+	fi
+
+	# (c) one-time legacy-dir migration: a staged pre-rename run directory
+	# moves once, and ledger_handled_ids still returns its pre-rename ids.
+	local fake_home="${TMP}/s15-fakehome"
+	rm -rf "$fake_home"
+	mkdir -p "${fake_home}/.claude/anaiis-coderabbit/runs"
+	printf '{"event":"intent_verified","id":"PR-77-501"}\n' >"${fake_home}/.claude/anaiis-coderabbit/runs/legacy.jsonl"
+
+	local handled
+	handled=$(HOME="$fake_home" bash -c "source '${LIB}/ledger.sh'; ledger_handled_ids 77")
+
+	if [ ! -d "${fake_home}/.claude/rabbit-sweep" ]; then
+		printf '  FAIL S15.3: expected the legacy run directory to migrate to .claude/rabbit-sweep\n'
+		errors=$((errors + 1))
+	fi
+	if [ -d "${fake_home}/.claude/anaiis-coderabbit" ]; then
+		printf '  FAIL S15.3: expected the legacy directory to no longer exist after migration\n'
+		errors=$((errors + 1))
+	fi
+	if ! printf '%s\n' "$handled" | grep -qxF "PR-77-501"; then
+		printf '  FAIL S15.3: expected ledger_handled_ids to still return pre-rename id PR-77-501, got: %s\n' "$handled"
+		errors=$((errors + 1))
+	fi
+	rm -rf "$fake_home"
+
+	# (d) ledger_no_tests writes a distinct, queryable event.
+	local no_tests_ledger="${TMP}/s15-no-tests.jsonl"
+	LEDGER="$no_tests_ledger"
+	: >"$LEDGER"
+	# shellcheck source=lib/ledger.sh
+	source "${LIB}/ledger.sh"
+	LEDGER_DIR="$test_dir"
+	if ! ledger_no_tests "S15-4" 2>/dev/null; then
+		printf '  FAIL S15.4: ledger_no_tests exited non-zero or is not defined\n'
+		errors=$((errors + 1))
+	fi
+	if ! grep -q '"event":"no_tests","id":"S15-4"' "$no_tests_ledger"; then
+		printf '  FAIL S15.4: expected a no_tests event for S15-4, got:\n%s\n' "$(cat "$no_tests_ledger")"
+		errors=$((errors + 1))
+	fi
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S15: ledger persistence (cross-process resume, unset-LEDGER guard, legacy migration continuity, no_tests event)"
+	else
+		fail "S15: ledger persistence (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
 # Run all
 # ---------------------------------------------------------------------------
-printf '=== anaiis-coderabbit smoke tests ===\n'
+printf '=== rabbit-sweep smoke tests ===\n'
 s1
 s2
 s3
@@ -895,6 +1270,9 @@ s9
 s10
 s11
 s12
+s13
+s14
+s15
 
 printf '\nResults: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
