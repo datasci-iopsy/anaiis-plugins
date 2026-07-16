@@ -1,7 +1,7 @@
 {
     "name": "anaiis-git-ops",
     "description": "Git ops: rebase, changelog, PR, and finish pipelines",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "author": {
         "name": "datasci-iopsy"
     }

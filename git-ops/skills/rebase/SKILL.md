@@ -3,7 +3,7 @@ name: rebase
 description: "Explicit /anaiis-git-ops:rebase, rebase commits into logical groups before PR review"
 user-invocable: true
 trigger: manual
-version: 0.2.0
+version: 0.2.1
 ---
 
 # Git Rebase (Branch Reconstruction)
@@ -22,6 +22,9 @@ $ARGUMENTS: [branch] [base] [--dry-run] [--confirm]
 - `base`: base ref to rebase onto (default: `main`)
 - `--dry-run`: phases 0-3 only; print the plan, do not execute
 - `--confirm`: pause for explicit approval after phase 3, before any destructive work
+
+Runs end-to-end without pausing by default -- the invocation is the authorization. Add
+`--confirm` to gate execution on plan approval instead.
 
 Examples:
 - `/anaiis-git-ops:rebase`
