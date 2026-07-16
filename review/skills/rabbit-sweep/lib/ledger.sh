@@ -7,7 +7,7 @@ LEDGER_DIR="${HOME}/.claude/rabbit-sweep/runs"
 # One-time migration from the pre-rename location; preserves run history
 # and PR-mode idempotency (ledger_handled_ids scans this directory).
 if [ -d "${HOME}/.claude/anaiis-coderabbit" ] && [ ! -e "${HOME}/.claude/rabbit-sweep" ]; then
-	mv "${HOME}/.claude/anaiis-coderabbit" "${HOME}/.claude/rabbit-sweep"
+	mv "${HOME}/.claude/anaiis-coderabbit" "${HOME}/.claude/rabbit-sweep" 2>/dev/null || [ -d "${HOME}/.claude/rabbit-sweep" ]
 fi
 
 ledger_init() {
@@ -15,7 +15,8 @@ ledger_init() {
 	mkdir -p "$LEDGER_DIR"
 	local iso
 	iso=$(date -u +%Y%m%dT%H%M%SZ)
-	local safe_branch="${branch//\//-}"
+	local safe_branch
+	safe_branch=$(printf '%s' "$branch" | { command -v sha1sum >/dev/null 2>&1 && sha1sum || shasum; } | cut -d' ' -f1)
 	local suffix=0 candidate
 	while :; do
 		candidate="${LEDGER_DIR}/${safe_branch}-${iso}${suffix:+-${suffix}}.jsonl"
@@ -42,7 +43,8 @@ ledger_init() {
 # Usage: ledger_resume [branch]  (defaults to the current git branch)
 ledger_resume() {
 	local branch="${1:-$(git branch --show-current 2>/dev/null)}"
-	local safe_branch="${branch//\//-}"
+	local safe_branch
+	safe_branch=$(printf '%s' "$branch" | { command -v sha1sum >/dev/null 2>&1 && sha1sum || shasum; } | cut -d' ' -f1)
 	local pointer="${LEDGER_DIR}/.current-${safe_branch}"
 	if [ ! -f "$pointer" ]; then
 		printf 'ledger_resume: no ledger pointer for branch "%s" -- run ledger_init first\n' "$branch" >&2
