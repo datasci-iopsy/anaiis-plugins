@@ -243,17 +243,17 @@ PR mode complete.
 
 Then one of, based on `$PUSHED` / `$PUSH_FAILED` / `$PENDING`:
 - `$PUSHED = true`:
-  ```
+  ```text
   Pushed to origin/<branch>. CodeRabbit bot will re-review shortly.
   When the bot posts new comments, run:
     /anaiis-review:rabbit-sweep --pr <N>
   ```
 - `$PUSH_FAILED = true`:
-  ```
+  ```text
   Push to origin/<branch> failed. Commits remain local; run `git push origin <branch>` manually, then re-run this skill.
   ```
 - otherwise (`$PENDING` empty, nothing to push):
-  ```
+  ```text
   No new commits to push this session.
   ```
 
