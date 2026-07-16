@@ -4,6 +4,8 @@
 # `review` subcommand; `auth status` always reports authenticated. Set
 # FAKE_CODERABBIT_EXIT_CODE to make the `review` subcommand exit non-zero
 # after emitting its fixture, simulating the CLI process itself crashing.
+set -euo pipefail
+
 case "$1" in
 	auth)
 		echo '{"authenticated":true}'
