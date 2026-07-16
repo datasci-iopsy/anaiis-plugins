@@ -138,7 +138,7 @@ s5() {
 }
 
 # ---------------------------------------------------------------------------
-# S6: git-state.sh artifacts, including -M rename collapse to final path
+# S6: git-state.sh artifacts, including both sides of a rename recorded
 # ---------------------------------------------------------------------------
 s6() {
 	local repo="${TMP}/s6"
@@ -163,10 +163,16 @@ s6() {
 		return
 	fi
 
+	# Both sides of the rename must be recorded, not just the new path:
+	# apply-plan.sh's per-file reconstruction only removes a path if it is
+	# both listed in some group's files and absent at head_sha, so dropping
+	# the old path here strands it in the reconstructed tree whenever it
+	# already existed before the fork point (see S16).
 	local rename_files
-	rename_files=$(jq -r '.[] | select(.subject == "refactor: rename b to b2") | .files[0]' "${run_dir}/commits.json")
-	if [ "$rename_files" != "b2.txt" ]; then
-		fail "S6: expected rename to collapse to final path b2.txt, got ${rename_files}"
+	rename_files=$(jq -c '.[] | select(.subject == "refactor: rename b to b2") | .files' "${run_dir}/commits.json")
+	if [ "$(printf '%s' "$rename_files" | jq 'index("b.txt") != null')" != "true" ] \
+		|| [ "$(printf '%s' "$rename_files" | jq 'index("b2.txt") != null')" != "true" ]; then
+		fail "S6: expected rename to list both old (b.txt) and new (b2.txt) paths, got ${rename_files}"
 		return
 	fi
 
@@ -183,7 +189,7 @@ s6() {
 		return
 	}
 
-	pass "S6: git-state.sh artifacts (commits.json rename collapse, diffstat, diff.patch, run.json)"
+	pass "S6: git-state.sh artifacts (commits.json records both rename paths, diffstat, diff.patch, run.json)"
 }
 
 # ---------------------------------------------------------------------------
@@ -342,7 +348,12 @@ PLAN
 }
 
 # ---------------------------------------------------------------------------
-# S12: apply-plan.sh non-empty diff on an incomplete plan (exit 33)
+# S12: apply-plan.sh coverage check catches an incomplete (non-rename) plan
+# before any destructive action (exit 36). Previously this scenario wasn't
+# caught until after reconstruction, as a non-empty diff (exit 33); the
+# coverage check now catches any omitted changed path -- rename or not --
+# up front, so exit 33's tree-diff check is a defense-in-depth backstop that
+# should no longer be reachable via a plan.json coverage gap alone.
 # ---------------------------------------------------------------------------
 s12() {
 	local repo="${TMP}/s12"
@@ -363,15 +374,15 @@ PLAN
 
 	(cd "$repo" && bash "${LIB}/apply-plan.sh" "$run_dir" >/dev/null 2>&1)
 	local code=$?
-	if [ "$code" -ne 33 ]; then
-		fail "S12: apply-plan.sh incomplete plan expected exit 33, got ${code}"
+	if [ "$code" -ne 36 ]; then
+		fail "S12: apply-plan.sh incomplete plan expected exit 36, got ${code}"
 		return
 	fi
-	if ! git -C "$repo" rev-parse -q --verify "refs/tags/safety/pre-rebase-feat/bad" >/dev/null; then
-		fail "S12: safety tag should be preserved after exit 33"
+	if git -C "$repo" rev-parse -q --verify "refs/tags/safety/pre-rebase-feat/bad" >/dev/null; then
+		fail "S12: exit 36 must fire before the safety tag is created"
 		return
 	fi
-	pass "S12: apply-plan.sh non-empty diff (exit 33, safety tag preserved)"
+	pass "S12: apply-plan.sh coverage check catches an incomplete non-rename plan (exit 36, no destructive action)"
 }
 
 # ---------------------------------------------------------------------------
@@ -480,6 +491,92 @@ s15() {
 }
 
 # ---------------------------------------------------------------------------
+# S16: apply-plan.sh coverage check catches a rename whose old path (already
+# present at fork_sha) is omitted from plan.json (exit 36, no destructive
+# action taken -- no safety tag, no tmp branch)
+# ---------------------------------------------------------------------------
+s16() {
+	local repo="${TMP}/s16"
+	new_repo "$repo"
+	echo "old content" >"${repo}/old-name.md" && git -C "$repo" add old-name.md && git -C "$repo" commit -q -m "chore: init with pre-existing file"
+	git -C "$repo" checkout -q -b feat/rename-preexisting
+	git -C "$repo" mv old-name.md new-name.md && git -C "$repo" commit -q -m "refactor: rename old-name to new-name"
+	local rename_sha
+	rename_sha=$(git -C "$repo" rev-parse HEAD)
+
+	local state_out run_dir
+	state_out=$(cd "$repo" && bash "${LIB}/git-state.sh" feat/rename-preexisting main)
+	run_dir=$(printf '%s' "$state_out" | jq -r '.run_dir')
+	cat >"${run_dir}/plan.json" <<PLAN
+{"groups": [{"message": "refactor: rename old-name to new-name", "commits": ["${rename_sha}"], "files": ["new-name.md"]}], "flagged": [], "rationale": "deliberately omits old-name.md"}
+PLAN
+
+	(cd "$repo" && bash "${LIB}/apply-plan.sh" "$run_dir" >/dev/null 2>&1)
+	local code=$?
+	if [ "$code" -ne 36 ]; then
+		fail "S16: apply-plan.sh incomplete rename plan expected exit 36, got ${code}"
+		return
+	fi
+	if git -C "$repo" rev-parse -q --verify "refs/tags/safety/pre-rebase-feat/rename-preexisting" >/dev/null; then
+		fail "S16: exit 36 must fire before the safety tag is created"
+		return
+	fi
+	if git -C "$repo" rev-parse -q --verify "refs/heads/tmp/rebase-feat/rename-preexisting" >/dev/null; then
+		fail "S16: exit 36 must fire before the tmp branch is created"
+		return
+	fi
+	pass "S16: apply-plan.sh coverage check catches an omitted rename path (exit 36, no destructive action)"
+}
+
+# ---------------------------------------------------------------------------
+# S17: apply-plan.sh correctly reconstructs a rename of a file that already
+# existed at fork_sha, once plan.json covers both paths (regression test for
+# the tree-verification failure this session's rebase attempt hit)
+# ---------------------------------------------------------------------------
+s17() {
+	local repo="${TMP}/s17"
+	new_repo "$repo"
+	echo "old content" >"${repo}/old-name.md" && git -C "$repo" add old-name.md && git -C "$repo" commit -q -m "chore: init with pre-existing file"
+	git -C "$repo" checkout -q -b feat/rename-preexisting-ok
+	git -C "$repo" mv old-name.md new-name.md && git -C "$repo" commit -q -m "refactor: rename old-name to new-name"
+	local rename_sha
+	rename_sha=$(git -C "$repo" rev-parse HEAD)
+	echo "extra line" >>"${repo}/new-name.md" && git -C "$repo" add new-name.md && git -C "$repo" commit -q -m "fix: tweak renamed file"
+	local tweak_sha
+	tweak_sha=$(git -C "$repo" rev-parse HEAD)
+
+	local state_out run_dir
+	state_out=$(cd "$repo" && bash "${LIB}/git-state.sh" feat/rename-preexisting-ok main)
+	run_dir=$(printf '%s' "$state_out" | jq -r '.run_dir')
+	cat >"${run_dir}/plan.json" <<PLAN
+{"groups": [{"message": "refactor: rename and tweak file", "commits": ["${rename_sha}", "${tweak_sha}"], "files": ["old-name.md", "new-name.md"]}], "flagged": [], "rationale": "covers both rename paths"}
+PLAN
+
+	local apply_out
+	apply_out=$(cd "$repo" && bash "${LIB}/apply-plan.sh" "$run_dir")
+	local code=$?
+	if [ "$code" -ne 0 ]; then
+		fail "S17: apply-plan.sh full-coverage rename plan expected exit 0, got ${code}"
+		return
+	fi
+	if [ "$(printf '%s' "$apply_out" | jq -r '.ok')" != "true" ]; then
+		fail "S17: apply-plan.sh expected ok:true"
+		return
+	fi
+	if [ -f "${repo}/old-name.md" ]; then
+		fail "S17: old-name.md should have been removed by reconstruction"
+		return
+	fi
+	local content
+	content=$(cat "${repo}/new-name.md")
+	if [ "$content" != $'old content\nextra line' ]; then
+		fail "S17: new-name.md should hold its final-state content, got: ${content}"
+		return
+	fi
+	pass "S17: apply-plan.sh reconstructs a rename of a pre-existing file (old path removed, new path final content)"
+}
+
+# ---------------------------------------------------------------------------
 # Run all
 # ---------------------------------------------------------------------------
 printf '=== anaiis-git-ops smoke tests ===\n'
@@ -498,6 +595,8 @@ s12
 s13
 s14
 s15
+s16
+s17
 
 printf '\nResults: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

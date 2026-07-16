@@ -14,6 +14,7 @@
 #  33  non-empty diff after reconstruction (tag + tmp preserved)
 #  34  same file path assigned to more than one group in plan.json (abort before any destructive action)
 #  35  branch moved since the run.json snapshot; compare-and-swap aborted (tag + tmp preserved)
+#  36  plan.json omits a path that changed between fork_sha and head_sha (abort before any destructive action)
 set -euo pipefail
 
 RUN_DIR="$1"
@@ -44,6 +45,22 @@ if [ -n "$dup_files" ]; then
 		printf '  %s (groups %s)\n' "$dup_file" "$group_idxs" >&2
 	done <<<"$dup_files"
 	exit 34
+fi
+
+# Coverage check: every path that changed between fork_sha and head_sha must
+# be assigned to some group, or the final-state-wins reconstruction below
+# (which only touches paths listed in plan.json) silently leaves fork_sha's
+# stale content in place for any omitted path -- most commonly the old side
+# of a rename whose file already existed at fork_sha. --no-renames forces
+# both sides of a rename to be listed separately (a plain -M diff collapses
+# a rename to a single name).
+changed_paths=$(git diff --no-renames --name-only "$fork_sha" "$head_sha")
+plan_paths=$(jq -r '.groups[].files[]' "$PLAN_JSON" | sort -u)
+missing_paths=$(comm -23 <(printf '%s\n' "$changed_paths" | sort -u) <(printf '%s\n' "$plan_paths"))
+if [ -n "$missing_paths" ]; then
+	printf 'ERROR: plan.json does not cover the following path(s) changed between %s and %s:\n' "$fork_sha" "$head_sha" >&2
+	printf '%s\n' "$missing_paths" | sed 's/^/  /' >&2
+	exit 36
 fi
 
 git tag "$safety_tag" "$head_sha"

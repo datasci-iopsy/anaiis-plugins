@@ -30,6 +30,7 @@ Refine the draft into final groups, applying:
 3. Config, tooling, and CI changes (Makefile, pyproject.toml, `.github/`, linting configs) form their own group.
 4. Documentation changes (README, CLAUDE.md) form their own group unless tightly coupled to a specific feature already grouped above.
 5. A file touched by more than one commit: place it in exactly one group, the one matching its final logical purpose. Do not split one file's changes across multiple groups.
+5a. A rename shows up in `commits.json` as both the old path and the new path on the same commit. Keep both in the same group as each other, even though the old path's final content doesn't matter -- the reconstruction script only deletes a path if it is both listed in a group and absent from the final tree, so dropping the old path leaves it stranded whenever it already existed before the branch.
 6. Binary files and submodule changes: never place them in a group. List their paths in `flagged` instead.
 7. A commit whose files are all flagged still needs exactly one group: assign its SHA to the group matching its own conventional-commit prefix in `draft-groups.json` if one exists, otherwise place it alone in a new dedicated group (e.g. `"message": "chore: track binary/submodule updates"`, `"files": []`).
 
