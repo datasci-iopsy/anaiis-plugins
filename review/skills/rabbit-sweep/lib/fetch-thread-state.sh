@@ -35,12 +35,12 @@ PR_NUM="$2"
 OUT_FILE="$3"
 GH="${THREAD_STATE_GH:-gh}"
 
-OWNER="${REPO%%/*}"
-NAME="${REPO##*/}"
-if [[ -z "$OWNER" ]] || [[ -z "$NAME" ]] || [[ "$OWNER" == "$REPO" ]]; then
+if [[ ! "$REPO" =~ ^[^/]+/[^/]+$ ]]; then
 	printf '[fetch-thread-state] repo must be <owner>/<name>, got: %s\n' "$REPO" >&2
 	exit 1
 fi
+OWNER="${REPO%/*}"
+NAME="${REPO#*/}"
 
 if ! [[ "$PR_NUM" =~ ^[0-9]+$ ]]; then
 	printf '[fetch-thread-state] PR number must be numeric, got: %s\n' "$PR_NUM" >&2
