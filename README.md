@@ -53,7 +53,7 @@ mid-session, run `/plugin` (update the plugin there) followed by `/reload-plugin
 Once installed, invoke skills by name at the prompt:
 
 ```
-/anaiis-coderabbit              -- triage CodeRabbit findings and fix severity-3+ issues
+/anaiis-review:rabbit-sweep     -- triage CodeRabbit findings and fix severity-3+ issues
 /anaiis-litreview "topic"       -- synthesize literature from your local catalog
 /anaiis-duckdb                  -- query a local CSV, Parquet, or Excel file
 /anaiis-termchart               -- quick ASCII/ANSI charts in the terminal (also auto-triggers on viz requests)

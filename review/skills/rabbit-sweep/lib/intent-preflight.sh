@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# intent-preflight.sh: deterministic pre-verifier checks for anaiis-coderabbit.
+# intent-preflight.sh: deterministic pre-verifier checks for rabbit-sweep.
 # Usage: intent-preflight.sh <file> <line_start> <line_end>
 # Exits 0 if all checks pass; exits 1 with reason on stderr (preflight:<code>).
 #
