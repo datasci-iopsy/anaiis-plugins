@@ -56,7 +56,7 @@ fi
 # a rename to a single name).
 changed_paths=$(git diff --no-renames --name-only "$fork_sha" "$head_sha")
 plan_paths=$(jq -r '.groups[].files[]' "$PLAN_JSON" | sort -u)
-missing_paths=$(comm -23 <(printf '%s\n' "$changed_paths" | sort -u) <(printf '%s\n' "$plan_paths"))
+missing_paths=$(comm -23 <(printf '%s\n' "$changed_paths" | grep -v '^$' | sort -u) <(printf '%s\n' "$plan_paths" | grep -v '^$'))
 if [ -n "$missing_paths" ]; then
 	printf 'ERROR: plan.json does not cover the following path(s) changed between %s and %s:\n' "$fork_sha" "$head_sha" >&2
 	printf '%s\n' "$missing_paths" | sed 's/^/  /' >&2
