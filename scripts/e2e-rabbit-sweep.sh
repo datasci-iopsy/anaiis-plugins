@@ -28,6 +28,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REVIEW_PLUGIN="${REPO_ROOT}/review"
 LEDGER_STORE="${HOME}/.claude/rabbit-sweep/runs"
+mkdir -p "$LEDGER_STORE"
 
 if ! command -v claude >/dev/null 2>&1; then
 	echo "SKIPPED: claude CLI not found on PATH -- cannot run the headless harness." >&2
