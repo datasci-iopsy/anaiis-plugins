@@ -1159,12 +1159,15 @@ s15() {
 	rm -rf "$test_dir"
 	mkdir -p "$test_dir"
 	local branch="s15-branch"
+	local ab_home="${TMP}/s15-home-ab"
+	rm -rf "$ab_home"
+	mkdir -p "$ab_home"
 
 	# (a) init in one process, resume + append in a second -- one ledger file,
 	# both events present. Exit codes are captured, not asserted here (the
 	# ledger_count/event_count checks below are the actual assertions); this
 	# only keeps a subprocess failure from tripping this script's own `set -e`.
-	if ! bash -c "
+	if ! HOME="$ab_home" bash -c "
 		source '${LIB}/ledger.sh'
 		LEDGER_DIR='${test_dir}'
 		ledger_init '${branch}' 'main' 'local' >/dev/null
@@ -1172,7 +1175,7 @@ s15() {
 		printf '  FAIL S15.1: ledger_init subprocess exited non-zero\n'
 		errors=$((errors + 1))
 	fi
-	if ! bash -c "
+	if ! HOME="$ab_home" bash -c "
 		source '${LIB}/ledger.sh'
 		LEDGER_DIR='${test_dir}'
 		ledger_resume '${branch}' && ledger_skip 'S15-1' 2 'nitpick'
@@ -1199,7 +1202,7 @@ s15() {
 	# (b) a mutator with $LEDGER unset (no ledger_resume call) fails non-zero
 	# and points at ledger_resume rather than blind-appending.
 	local err
-	if err=$(env -u LEDGER bash -c "source '${LIB}/ledger.sh'; ledger_skip 'S15-2' 2 'no ledger set'" 2>&1); then
+	if err=$(HOME="$ab_home" env -u LEDGER bash -c "source '${LIB}/ledger.sh'; ledger_skip 'S15-2' 2 'no ledger set'" 2>&1); then
 		printf '  FAIL S15.2: expected ledger_skip to fail with no $LEDGER set, but it succeeded\n'
 		errors=$((errors + 1))
 	elif ! printf '%s' "$err" | grep -q 'ledger_resume'; then
@@ -1233,6 +1236,11 @@ s15() {
 
 	# (d) ledger_no_tests writes a distinct, queryable event.
 	local no_tests_ledger="${TMP}/s15-no-tests.jsonl"
+	local d_home="${TMP}/s15-home-d"
+	rm -rf "$d_home"
+	mkdir -p "$d_home"
+	local old_home="$HOME"
+	HOME="$d_home"
 	LEDGER="$no_tests_ledger"
 	: >"$LEDGER"
 	# shellcheck source=lib/ledger.sh
@@ -1246,6 +1254,7 @@ s15() {
 		printf '  FAIL S15.4: expected a no_tests event for S15-4, got:\n%s\n' "$(cat "$no_tests_ledger")"
 		errors=$((errors + 1))
 	fi
+	HOME="$old_home"
 
 	if [ "$errors" -eq 0 ]; then
 		pass "S15: ledger persistence (cross-process resume, unset-LEDGER guard, legacy migration continuity, no_tests event)"
