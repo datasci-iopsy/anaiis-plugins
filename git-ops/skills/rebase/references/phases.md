@@ -118,24 +118,60 @@ into place. Exit code:
 
 | Exit | Meaning | Action |
 |---|---|---|
-| 0 | success; branch swapped | continue to Phase 6 |
-| 30 | safety tag already exists | stop; tell the user to resolve or delete the stale tag |
+| 0 | success; branch swapped, `result.json` written | continue to Phase 6 |
+| 30 | safety tag already exists and points elsewhere | stop; tell the user to resolve or delete the stale tag (a stale tag pointing at this run's own `head_sha` does not block; see 32/33/35 below) |
 | 31 | tmp branch already exists | stop; tell the user to resolve or delete the stale branch |
-| 32 | group commit failed mid-reconstruction | stop; show the commit output verbatim; the tag and tmp branch are preserved; ask the user: fix and retry, skip a failing hook with explicit `--no-verify` approval, or abort via the recovery command in stderr |
-| 33 | non-empty diff after reconstruction | stop; show the diff; the tag and tmp branch are preserved; do NOT proceed; offer the recovery command in stderr |
+| 32 | group commit failed mid-reconstruction | tag and tmp branch preserved; see "Recovery choice" below |
+| 33 | non-empty diff after reconstruction | tag and tmp branch preserved; see "Recovery choice" below |
 | 34 | same file path assigned to more than one group in plan.json | stop; show the duplicated path(s) and group indices from stderr; no destructive action was taken; ask the user or re-run planning to fix `plan.json` |
+| 35 | branch moved externally between capture and swap (compare-and-swap failed) | tag and tmp branch preserved; see "Recovery choice" below -- **the safety tag must not be deleted here**, it is the only remaining record of the pre-rebase head once the branch itself has moved |
 | 36 | plan.json omits a path that changed between fork and head (most commonly one side of a rename whose file already existed before the branch) | stop; show the missing path(s) from stderr; no destructive action was taken; ask the user or re-run planning to add the missing path(s) to `plan.json` |
 | 37 | base has moved since this plan was captured (advanced or diverged from its snapshot) | stop; show the message from stderr (advanced -> re-run Phase 1 to recapture, then re-plan; diverged -> investigate before proceeding); no destructive action was taken |
 
+**Recovery choice (exit 32, 33, or 35):** present the human with three options -- this
+decision always stays with the human, never automatic on failure detection:
+
+- **Fix and retry**: address the cause (failing hook, unexpected diff, external branch
+  move), then re-run `apply-plan.sh "$RUN_DIR"`. A stale tag from the failed attempt at
+  the same `head_sha` will not block this (exit 30's relaxation above).
+- **Skip a failing hook** (exit 32 only): with explicit human approval in the moment,
+  re-run as `APPLY_PLAN_NO_VERIFY=1 bash "$LIB_DIR/apply-plan.sh" "$RUN_DIR"`. Never set
+  this as a default; only after the human has approved skipping this specific hook.
+- **Abort**: run `bash "$LIB_DIR/abort-plan.sh" "$RUN_DIR"`. This executes the recovery
+  the human chose -- it does not decide to abort on its own. It refuses (exit 40) unless
+  HEAD is still on the tmp branch, restores HEAD to the real branch, deletes the tmp
+  branch, and deletes the safety tag only if it is provably redundant (branch sha == tag
+  sha, true for 32/33, never true for 35). Prints `pre_abort_status`/`residual_status`
+  from `git status --porcelain` so anything discarded is on the record; report
+  `residual_status` to the user rather than assuming the abort left a clean tree.
+
 ---
 
-## Phase 6: Hand off (Claude does NOT push)
+## Phase 6: Publish
 
 ```bash
 git log <base>..<branch> --oneline
+bash "$LIB_DIR/publish.sh" "$RUN_DIR"
 ```
 
-Present the result and the command for the user to run. If Phase 0 reported no upstream:
+`publish.sh` only ever decides and prints what to run next; it never pushes anything
+itself. Parse its JSON (`{mode, remote, branch, expect_sha, command, reason}`):
+
+- **`mode: "refuse"`**: fall back to the manual hand-off below, including `reason`.
+- **`mode: "plain"` or `"lease"`**: this is the moment the *real* permission system
+  evaluates the actual `git push ...` string -- it is not laundered through a script, so
+  a still-unnarrowed deny rule blocks it here exactly as it would in any other context.
+  If `--confirm` was passed at invocation, show `command` and ask before running it
+  (same review gate `--confirm` already applies to the plan in Phase 3); otherwise run it
+  directly as its own Bash call. If the call is denied or the push otherwise fails, fall
+  back to the manual hand-off below -- do not retry with a different flag, and never
+  escalate a plain push to a forced one.
+- **After a successful push**: re-verify by reading `git rev-parse <remote>/<branch>` and
+  comparing to the local branch sha -- a push can exit non-zero after the ref actually
+  moved, or print an ambiguous "Everything up-to-date." Report the verified sha, not just
+  the command's exit code.
+
+Manual hand-off (used whenever `publish.sh` refuses, or the push above was denied/failed):
 
 ```
 Rebase complete. <N> clean commits:
@@ -145,7 +181,8 @@ Rebase complete. <N> clean commits:
 
 To publish, run:
 
-  git push origin <branch>
+  <command from publish.sh, or a plain `git push origin <branch>` if publish.sh itself
+  refused before deciding a command>
 
 ---
 Only if you need to undo this (do NOT run this after a successful push -- it will locally
@@ -160,10 +197,11 @@ Once satisfied the push is correct and you no longer need the safety net:
 ---
 ```
 
-If Phase 0 reported an existing upstream, substitute `git push --force-with-lease origin
-<branch>` for the publish command in the block above, and note in the same "Only if you need
-to undo this" warning that the revert must be followed by the same force-with-lease push to
-resync. Claude does not execute the push. This is a human-only action.
+If `mode` was `"lease"`, note in the same "Only if you need to undo this" warning that the
+revert must be followed by the same force-with-lease push (using a freshly recomputed
+`expect_sha`, not the one from this now-stale decision) to resync. The safety tag is never
+deleted automatically here either way -- the user deletes it whenever satisfied, exactly
+as before this automation existed.
 
 ---
 
@@ -176,11 +214,12 @@ resync. Claude does not execute the push. This is a human-only action.
 | On main/master (exit 12) | Check out the correct feature branch |
 | Merge commits in range (exit 13) | Refuse; suggest `git rebase --onto` manually |
 | No commits in range (exit 20) | Nothing to do |
-| Safety tag or tmp branch collision (exit 30/31) | Resolve or delete the stale ref, then re-run |
-| Commit failure during group commit (exit 32) | Fix / skip (with explicit approval) / abort via the printed recovery command |
-| Tree verification fails (exit 33) | `git checkout <branch> && git reset --hard safety/pre-rebase-<branch> && git branch -D tmp/rebase-<branch>` |
+| Safety tag or tmp branch collision (exit 30/31) | Resolve or delete the stale ref, then re-run (a tag already at this run's own `head_sha` does not collide -- exit 30 only fires for a tag pointing elsewhere) |
+| Commit failure during group commit (exit 32) | Fix and retry / skip the hook with `APPLY_PLAN_NO_VERIFY=1` / abort via `bash "$LIB_DIR/abort-plan.sh" "$RUN_DIR"` -- see "Recovery choice" above |
+| Tree verification fails (exit 33) | Same three-way choice as exit 32; on abort, `abort-plan.sh` deletes the safety tag too, since it's redundant (branch sha == tag sha) |
 | Duplicate file across groups (exit 34) | Fix `plan.json` (or re-run planning) so each file appears in exactly one group, then re-run |
+| Branch moved externally, compare-and-swap failed (exit 35) | Same three-way choice as exit 32/33, **except** abort must not delete the safety tag -- it is the only remaining record of the pre-rebase head once the branch has moved. `abort-plan.sh` handles this automatically by comparing shas rather than assuming; never substitute a manual `git reset --hard safety/pre-rebase-<branch>` here, it would discard the very external change that caused the failure |
 | plan.json omits a changed path (exit 36) | Add the missing path(s) to the appropriate group in `plan.json` (or re-run planning), then re-run. Common cause: a rename of a file that already existed before the branch -- both the old and new path must be covered |
 | Base moved since capture (exit 37) | Re-run Phase 1 (`git-state.sh`) to recapture, then re-plan (Phase 2-3), before retrying apply |
-| Process interrupted mid-execute | Same revert command as above; the safety tag always survives until the user deletes it |
+| Process interrupted mid-execute | `bash "$LIB_DIR/abort-plan.sh" "$RUN_DIR"` if HEAD is still on the tmp branch; the safety tag always survives until deleted (by the user, or by `abort-plan.sh` when redundant) |
 | Ran `git reset --hard safety/pre-rebase-<branch>` after already pushing | `git reset --hard origin/<branch>` to resync local to what's on origin (verify with `git status` and `git log --oneline origin/<branch>..HEAD` first) |
