@@ -53,6 +53,30 @@ Writes `$RUN_DIR/draft-groups.json`. Never fails; always continue to Phase 3.
 
 ## Phase 3: Planner agent
 
+Before spawning the planner, check whether an identical plan already exists for this branch:
+```bash
+REUSE=$(bash "$LIB_DIR/find-reusable-plan.sh" "$RUN_DIR")
+```
+If `$REUSE` is non-empty, verify it before reusing: confirm `${REUSE}/run.json` and
+`${RUN_DIR}/run.json` have identical `base_sha`, `fork_sha`, and `head_sha`, and that
+`${REUSE}/diff.patch` and `${RUN_DIR}/diff.patch` are byte-identical (`cmp -s`). If any
+check fails, treat `$REUSE` as empty and spawn the planner as normal instead of copying.
+
+If `$REUSE` is non-empty and passes verification:
+- **Without `--confirm`** (the default): copy the match's plan verbatim, print that it was
+  reused, and skip straight to printing the plan below -- do not spawn the planner.
+  ```bash
+  cp "${REUSE}/plan.json" "${RUN_DIR}/plan.json"
+  printf 'Reusing identical plan from %s (byte-identical diffstat, within the last hour).\n' "$REUSE"
+  ```
+  This keeps the default "runs end-to-end without pausing" behavior (see `SKILL.md`) while
+  still being visible, not silent, about what it did.
+- **With `--confirm`**: ask the user "An identical diff was already planned in `<REUSE>`.
+  Reuse that plan? (y/n)" -- on yes, copy `plan.json` as above; on no, proceed to spawn the
+  planner as normal.
+
+If `$REUSE` is empty, spawn the planner as normal:
+
 Spawn `Agent(subagent_type="rebase-planner", description="Plan rebase for <branch>")`
 with `$RUN_DIR` as input. It reads `commits.json`, `diffstat.txt`, `diff.patch`, and
 `draft-groups.json`, and returns one JSON line: `{groups, flagged, rationale}`. Write its
@@ -101,6 +125,7 @@ into place. Exit code:
 | 33 | non-empty diff after reconstruction | stop; show the diff; the tag and tmp branch are preserved; do NOT proceed; offer the recovery command in stderr |
 | 34 | same file path assigned to more than one group in plan.json | stop; show the duplicated path(s) and group indices from stderr; no destructive action was taken; ask the user or re-run planning to fix `plan.json` |
 | 36 | plan.json omits a path that changed between fork and head (most commonly one side of a rename whose file already existed before the branch) | stop; show the missing path(s) from stderr; no destructive action was taken; ask the user or re-run planning to add the missing path(s) to `plan.json` |
+| 37 | base has moved since this plan was captured (advanced or diverged from its snapshot) | stop; show the message from stderr (advanced -> re-run Phase 1 to recapture, then re-plan; diverged -> investigate before proceeding); no destructive action was taken |
 
 ---
 
@@ -122,19 +147,23 @@ To publish, run:
 
   git push origin <branch>
 
-The safety tag `safety/pre-rebase-<branch>` remains. To revert:
+---
+Only if you need to undo this (do NOT run this after a successful push -- it will locally
+revert what you just pushed; origin is unaffected until you push again, but your local
+branch and origin will disagree):
 
   git reset --hard safety/pre-rebase-<branch>
 
-Delete the safety tag when you are satisfied:
+Once satisfied the push is correct and you no longer need the safety net:
 
   git tag -d safety/pre-rebase-<branch>
+---
 ```
 
 If Phase 0 reported an existing upstream, substitute `git push --force-with-lease origin
-<branch>` for the publish command and note that the revert command must be followed by
-the same force-with-lease push. Claude does not execute the push. This is a human-only
-action.
+<branch>` for the publish command in the block above, and note in the same "Only if you need
+to undo this" warning that the revert must be followed by the same force-with-lease push to
+resync. Claude does not execute the push. This is a human-only action.
 
 ---
 
@@ -152,4 +181,6 @@ action.
 | Tree verification fails (exit 33) | `git checkout <branch> && git reset --hard safety/pre-rebase-<branch> && git branch -D tmp/rebase-<branch>` |
 | Duplicate file across groups (exit 34) | Fix `plan.json` (or re-run planning) so each file appears in exactly one group, then re-run |
 | plan.json omits a changed path (exit 36) | Add the missing path(s) to the appropriate group in `plan.json` (or re-run planning), then re-run. Common cause: a rename of a file that already existed before the branch -- both the old and new path must be covered |
+| Base moved since capture (exit 37) | Re-run Phase 1 (`git-state.sh`) to recapture, then re-plan (Phase 2-3), before retrying apply |
 | Process interrupted mid-execute | Same revert command as above; the safety tag always survives until the user deletes it |
+| Ran `git reset --hard safety/pre-rebase-<branch>` after already pushing | `git reset --hard origin/<branch>` to resync local to what's on origin (verify with `git status` and `git log --oneline origin/<branch>..HEAD` first) |

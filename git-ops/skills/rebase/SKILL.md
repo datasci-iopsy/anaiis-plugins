@@ -3,7 +3,7 @@ name: rebase
 description: "Explicit /anaiis-git-ops:rebase, rebase commits into logical groups before PR review"
 user-invocable: true
 trigger: manual
-version: 0.2.1
+version: 0.3.0
 ---
 
 # Git Rebase (Branch Reconstruction)

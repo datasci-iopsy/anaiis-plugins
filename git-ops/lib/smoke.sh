@@ -577,6 +577,167 @@ PLAN
 }
 
 # ---------------------------------------------------------------------------
+# S18: apply-plan.sh detects the base (main) has advanced since run.json was
+# captured, and aborts before any destructive action (exit 37, no safety tag,
+# no tmp branch) instead of silently reconstructing onto a stale fork point.
+# ---------------------------------------------------------------------------
+s18() {
+	local errors=0
+
+	# Case 1: base genuinely advances *after* capture -- must abort, exit 37.
+	local repo="${TMP}/s18a"
+	new_repo "$repo"
+	echo a >"${repo}/a.txt" && git -C "$repo" add a.txt && git -C "$repo" commit -q -m "chore: init"
+	git -C "$repo" checkout -q -b feat/base-moved
+	echo b >"${repo}/b.txt" && git -C "$repo" add b.txt && git -C "$repo" commit -q -m "feat: add b"
+	local feat_sha
+	feat_sha=$(git -C "$repo" rev-parse HEAD)
+
+	local state_out run_dir
+	state_out=$(cd "$repo" && bash "${LIB}/git-state.sh" feat/base-moved main)
+	run_dir=$(printf '%s' "$state_out" | jq -r '.run_dir')
+	cat >"${run_dir}/plan.json" <<PLAN
+{"groups": [{"message": "feat: add b", "commits": ["${feat_sha}"], "files": ["b.txt"]}], "flagged": [], "rationale": "single group"}
+PLAN
+
+	# Advance main after the snapshot was captured.
+	git -C "$repo" checkout -q main
+	echo unrelated >"${repo}/c.txt" && git -C "$repo" add c.txt && git -C "$repo" commit -q -m "chore: unrelated main work"
+	git -C "$repo" checkout -q feat/base-moved
+
+	(cd "$repo" && bash "${LIB}/apply-plan.sh" "$run_dir" >/dev/null 2>&1)
+	local code=$?
+	if [ "$code" -ne 37 ]; then
+		printf '  FAIL S18.1: expected exit 37 when base advances after capture, got %s\n' "$code"
+		errors=$((errors + 1))
+	fi
+	if git -C "$repo" rev-parse -q --verify "refs/tags/safety/pre-rebase-feat/base-moved" >/dev/null; then
+		printf '  FAIL S18.2: exit 37 must fire before the safety tag is created\n'
+		errors=$((errors + 1))
+	fi
+	if git -C "$repo" rev-parse -q --verify "refs/heads/tmp/rebase-feat/base-moved" >/dev/null; then
+		printf '  FAIL S18.3: exit 37 must fire before the tmp branch is created\n'
+		errors=$((errors + 1))
+	fi
+
+	# Case 2 (regression guard): a branch that is simply behind main *before*
+	# capture, with nothing changing afterward, must NOT be flagged as stale.
+	# An earlier version of this check compared to fork_sha instead of a
+	# captured base_sha snapshot and false-positived on this ordinary case.
+	local repo2="${TMP}/s18b"
+	new_repo "$repo2"
+	echo a >"${repo2}/a.txt" && git -C "$repo2" add a.txt && git -C "$repo2" commit -q -m "chore: init"
+	git -C "$repo2" checkout -q -b feat/behind-main
+	echo b >"${repo2}/b.txt" && git -C "$repo2" add b.txt && git -C "$repo2" commit -q -m "feat: add b"
+	local feat_sha2
+	feat_sha2=$(git -C "$repo2" rev-parse HEAD)
+	# main advances *before* git-state.sh ever runs -- ordinary, pre-existing drift.
+	git -C "$repo2" checkout -q main
+	echo unrelated >"${repo2}/c.txt" && git -C "$repo2" add c.txt && git -C "$repo2" commit -q -m "chore: pre-existing main work"
+	git -C "$repo2" checkout -q feat/behind-main
+
+	local state_out2 run_dir2
+	state_out2=$(cd "$repo2" && bash "${LIB}/git-state.sh" feat/behind-main main)
+	run_dir2=$(printf '%s' "$state_out2" | jq -r '.run_dir')
+	cat >"${run_dir2}/plan.json" <<PLAN
+{"groups": [{"message": "feat: add b", "commits": ["${feat_sha2}"], "files": ["b.txt"]}], "flagged": [], "rationale": "single group"}
+PLAN
+
+	local apply_out2
+	apply_out2=$(cd "$repo2" && bash "${LIB}/apply-plan.sh" "$run_dir2")
+	local code2=$?
+	if [ "$code2" -ne 0 ]; then
+		printf '  FAIL S18.4: expected exit 0 for an ordinary behind-main branch, got %s\n' "$code2"
+		errors=$((errors + 1))
+	elif [ "$(printf '%s' "$apply_out2" | jq -r '.ok')" != "true" ]; then
+		printf '  FAIL S18.4: expected ok:true for an ordinary behind-main branch\n'
+		errors=$((errors + 1))
+	fi
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S18: base-staleness check (exit 37 on real staleness, no false positive when merely behind main)"
+	else
+		fail "S18: base-staleness check (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# S19: find-reusable-plan.sh detects a byte-identical, same-branch, recent
+# (<1h) plan to reuse, and correctly excludes a differing diffstat and a
+# stale (>1h old) candidate. HOME is isolated to a temp dir since RUN_ROOT is
+# under $HOME/.claude/anaiis-git-ops/runs, matching rabbit-sweep's S15 technique.
+# ---------------------------------------------------------------------------
+s19() {
+	local errors=0
+	local fake_home="${TMP}/s19-home"
+	rm -rf "$fake_home"
+	mkdir -p "$fake_home"
+	local run_root="${fake_home}/.claude/anaiis-git-ops/runs"
+	mkdir -p "$run_root"
+
+	# A prior run for the same branch, recent, with a plan.json (reusable candidate).
+	local prior_dir="${run_root}/feat-x-20260801T100000Z-0"
+	mkdir -p "$prior_dir"
+	printf ' a.txt | 1 +\n' >"${prior_dir}/diffstat.txt"
+	printf '{"groups":[]}\n' >"${prior_dir}/plan.json"
+	printf '{"branch":"feat/x"}\n' >"${prior_dir}/run.json"
+
+	# The current run: identical diffstat.
+	local current_dir="${run_root}/feat-x-20260801T100500Z-0"
+	mkdir -p "$current_dir"
+	printf ' a.txt | 1 +\n' >"${current_dir}/diffstat.txt"
+	printf '{"branch":"feat/x"}\n' >"${current_dir}/run.json"
+
+	local match
+	match=$(HOME="$fake_home" bash "${LIB}/find-reusable-plan.sh" "$current_dir")
+	if [ "$match" != "$prior_dir" ]; then
+		printf '  FAIL S19.1: expected to match %s, got: %s\n' "$prior_dir" "$match"
+		errors=$((errors + 1))
+	fi
+
+	# A different current diffstat must not match.
+	local current_dir2="${run_root}/feat-x-20260801T101000Z-0"
+	mkdir -p "$current_dir2"
+	printf ' b.txt | 5 +\n' >"${current_dir2}/diffstat.txt"
+	printf '{"branch":"feat/x"}\n' >"${current_dir2}/run.json"
+
+	local match2
+	match2=$(HOME="$fake_home" bash "${LIB}/find-reusable-plan.sh" "$current_dir2")
+	if [ -n "$match2" ]; then
+		printf '  FAIL S19.2: expected no match for a differing diffstat, got: %s\n' "$match2"
+		errors=$((errors + 1))
+	fi
+
+	# A stale (>1h old) candidate with an otherwise identical diffstat must not match.
+	# Remove the recent match first so only the stale one could possibly match.
+	rm -rf "$prior_dir"
+	local stale_dir="${run_root}/feat-x-20260801T010000Z-0"
+	mkdir -p "$stale_dir"
+	printf ' a.txt | 1 +\n' >"${stale_dir}/diffstat.txt"
+	printf '{"groups":[]}\n' >"${stale_dir}/plan.json"
+	printf '{"branch":"feat/x"}\n' >"${stale_dir}/run.json"
+	touch -t "$(date -u -v-2H +%Y%m%d%H%M 2>/dev/null || date -u -d '2 hours ago' +%Y%m%d%H%M)" "$stale_dir"
+
+	local current_dir3="${run_root}/feat-x-20260801T110000Z-0"
+	mkdir -p "$current_dir3"
+	printf ' a.txt | 1 +\n' >"${current_dir3}/diffstat.txt"
+	printf '{"branch":"feat/x"}\n' >"${current_dir3}/run.json"
+
+	local match3
+	match3=$(HOME="$fake_home" bash "${LIB}/find-reusable-plan.sh" "$current_dir3")
+	if [ -n "$match3" ]; then
+		printf '  FAIL S19.3: expected no match for a stale (>1h) candidate, got: %s\n' "$match3"
+		errors=$((errors + 1))
+	fi
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S19: find-reusable-plan.sh (identical diffstat matches, differing diffstat and stale candidates do not)"
+	else
+		fail "S19: find-reusable-plan.sh (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
 # Run all
 # ---------------------------------------------------------------------------
 printf '=== anaiis-git-ops smoke tests ===\n'
@@ -597,6 +758,8 @@ s14
 s15
 s16
 s17
+s18
+s19
 
 printf '\nResults: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

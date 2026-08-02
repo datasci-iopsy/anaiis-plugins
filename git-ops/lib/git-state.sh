@@ -4,6 +4,8 @@
 # diff.patch, run.json).
 # Usage: git-state.sh [branch] [base]
 # Prints one JSON line: {run_dir, fork_sha, head_sha, commit_count}
+# run.json also carries base (ref name) and base_sha (base's resolved tip at
+# capture time, distinct from fork_sha) for apply-plan.sh's staleness check.
 #
 # Exit codes:
 #   0  artifacts written
@@ -16,8 +18,17 @@ BASE="${2:-main}"
 RUN_ROOT="${HOME}/.claude/anaiis-git-ops/runs"
 mkdir -p "$RUN_ROOT"
 
-fork_sha=$(git merge-base "$BASE" "$BRANCH")
+# Resolve $BASE to a SHA once so fork_sha and base_sha reflect the same
+# snapshot even if the ref advances between the two derivations below.
+base_sha=$(git rev-parse "$BASE")
+fork_sha=$(git merge-base "$base_sha" "$BRANCH")
 head_sha=$(git rev-parse "$BRANCH")
+# Snapshot of $BASE's own tip at capture time (distinct from fork_sha, the
+# merge-base): apply-plan.sh's staleness check needs to know what $BASE
+# pointed to when this run was captured, not just where this branch forked
+# from it -- a branch is normally behind $BASE's current tip even when
+# nothing has changed since capture, so comparing to fork_sha there would
+# false-positive on every ordinary rebase.
 
 shas=$(git log --reverse --format=%H "${fork_sha}..${BRANCH}")
 if [ -z "$shas" ]; then
@@ -78,8 +89,8 @@ git diff -M "${fork_sha}..${BRANCH}" >"${RUN_DIR}/diff.patch"
 
 commit_count=$(printf '%s\n' "$shas" | wc -l | tr -d ' ')
 
-jq -nc --arg branch "$BRANCH" --arg base "$BASE" --arg fork "$fork_sha" --arg head "$head_sha" --arg dir "$RUN_DIR" \
-	'{branch: $branch, base: $base, fork_sha: $fork, head_sha: $head, run_dir: $dir}' >"${RUN_DIR}/run.json"
+jq -nc --arg branch "$BRANCH" --arg base "$BASE" --arg fork "$fork_sha" --arg head "$head_sha" --arg basesha "$base_sha" --arg dir "$RUN_DIR" \
+	'{branch: $branch, base: $base, fork_sha: $fork, head_sha: $head, base_sha: $basesha, run_dir: $dir}' >"${RUN_DIR}/run.json"
 
 jq -nc --arg dir "$RUN_DIR" --arg fork "$fork_sha" --arg head "$head_sha" --argjson count "$commit_count" \
 	'{run_dir: $dir, fork_sha: $fork, head_sha: $head, commit_count: $count}'
