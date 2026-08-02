@@ -20,6 +20,7 @@ mkdir -p "$RUN_ROOT"
 
 # Resolve $BASE to a SHA once so fork_sha and base_sha reflect the same
 # snapshot even if the ref advances between the two derivations below.
+repo_root=$(git rev-parse --show-toplevel)
 base_sha=$(git rev-parse "$BASE")
 fork_sha=$(git merge-base "$base_sha" "$BRANCH")
 head_sha=$(git rev-parse "$BRANCH")
@@ -89,8 +90,8 @@ git diff -M "${fork_sha}..${BRANCH}" >"${RUN_DIR}/diff.patch"
 
 commit_count=$(printf '%s\n' "$shas" | wc -l | tr -d ' ')
 
-jq -nc --arg branch "$BRANCH" --arg base "$BASE" --arg fork "$fork_sha" --arg head "$head_sha" --arg basesha "$base_sha" --arg dir "$RUN_DIR" \
-	'{branch: $branch, base: $base, fork_sha: $fork, head_sha: $head, base_sha: $basesha, run_dir: $dir}' >"${RUN_DIR}/run.json"
+jq -nc --arg branch "$BRANCH" --arg base "$BASE" --arg fork "$fork_sha" --arg head "$head_sha" --arg basesha "$base_sha" --arg dir "$RUN_DIR" --arg root "$repo_root" \
+	'{branch: $branch, base: $base, fork_sha: $fork, head_sha: $head, base_sha: $basesha, run_dir: $dir, repo_root: $root}' >"${RUN_DIR}/run.json"
 
 jq -nc --arg dir "$RUN_DIR" --arg fork "$fork_sha" --arg head "$head_sha" --argjson count "$commit_count" \
 	'{run_dir: $dir, fork_sha: $fork, head_sha: $head, commit_count: $count}'

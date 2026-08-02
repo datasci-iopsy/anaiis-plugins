@@ -189,7 +189,15 @@ s6() {
 		return
 	}
 
-	pass "S6: git-state.sh artifacts (commits.json records both rename paths, diffstat, diff.patch, run.json)"
+	local recorded_root actual_root
+	recorded_root=$(jq -r '.repo_root' "${run_dir}/run.json")
+	actual_root=$(git -C "$repo" rev-parse --show-toplevel)
+	if [ "$recorded_root" != "$actual_root" ]; then
+		fail "S6: run.json repo_root should be ${actual_root}, got ${recorded_root}"
+		return
+	fi
+
+	pass "S6: git-state.sh artifacts (commits.json records both rename paths, diffstat, diff.patch, run.json, repo_root)"
 }
 
 # ---------------------------------------------------------------------------
@@ -980,6 +988,138 @@ PLAN
 }
 
 # ---------------------------------------------------------------------------
+# S22: publish.sh -- decide-only, never executes a push. A local bare repo
+# stands in for "origin". Covers plain/lease mode decisions, the guard
+# refusals, the fresh-vs-stale sha fix (ls-remote, not the local
+# remote-tracking ref), and the grep invariant enforcing the hard limit.
+# ---------------------------------------------------------------------------
+s22() {
+	local errors=0
+	local origin="${TMP}/s22-origin.git"
+	local repo="${TMP}/s22-repo"
+	git init -q --bare "$origin"
+	new_repo "$repo"
+	git -C "$repo" remote add origin "$origin"
+	echo a >"${repo}/a.txt" && git -C "$repo" add a.txt && git -C "$repo" commit -q -m "chore: init"
+	git -C "$repo" push -q -u origin main
+
+	git -C "$repo" checkout -q -b feat/pub
+	echo x >"${repo}/x.txt" && git -C "$repo" add x.txt && git -C "$repo" commit -q -m "feat: add x"
+	local x_sha
+	x_sha=$(git -C "$repo" rev-parse HEAD)
+
+	local state_out run_dir
+	state_out=$(cd "$repo" && bash "${LIB}/git-state.sh" feat/pub main)
+	run_dir=$(printf '%s' "$state_out" | jq -r '.run_dir')
+	cat >"${run_dir}/plan.json" <<PLAN
+{"groups": [{"message": "feat: add x", "commits": ["${x_sha}"], "files": ["x.txt"]}], "flagged": [], "rationale": "smoke fixture"}
+PLAN
+	(cd "$repo" && bash "${LIB}/apply-plan.sh" "$run_dir" >/dev/null)
+
+	# Case A: no remote ref for feat/pub yet -> mode plain, -u in the command.
+	local out_a mode_a command_a
+	out_a=$(cd "$repo" && bash "${LIB}/publish.sh" "$run_dir")
+	mode_a=$(printf '%s' "$out_a" | jq -r '.mode')
+	command_a=$(printf '%s' "$out_a" | jq -r '.command')
+	if [ "$mode_a" != "plain" ]; then
+		printf '  FAIL S22.1: expected mode plain (no remote ref yet), got %s: %s\n' "$mode_a" "$out_a"
+		errors=$((errors + 1))
+	fi
+	if ! printf '%s' "$command_a" | grep -q -- '-u origin feat/pub'; then
+		printf '  FAIL S22.2: plain-mode command should set tracking (-u), got: %s\n' "$command_a"
+		errors=$((errors + 1))
+	fi
+
+	# Case B: push once (establishing the remote ref), no divergence -> lease
+	# mode with expect_sha matching the remote's actual current sha.
+	git -C "$repo" push -q -u origin feat/pub
+	local out_b mode_b expect_b remote_sha
+	out_b=$(cd "$repo" && bash "${LIB}/publish.sh" "$run_dir")
+	mode_b=$(printf '%s' "$out_b" | jq -r '.mode')
+	expect_b=$(printf '%s' "$out_b" | jq -r '.expect_sha')
+	remote_sha=$(git -C "$origin" rev-parse feat/pub)
+	if [ "$mode_b" != "lease" ] || [ "$expect_b" != "$remote_sha" ]; then
+		printf '  FAIL S22.3: expected mode lease with expect_sha=%s, got: %s\n' "$remote_sha" "$out_b"
+		errors=$((errors + 1))
+	fi
+
+	# Case C: the bare repo's ref advances directly (not via a local fetch),
+	# so the local remote-tracking ref is now stale. publish.sh must report
+	# the FRESH sha from ls-remote, not the stale local tracking ref -- this
+	# is the fix for the TOCTOU bug an implicit lease (or @{u}) would have.
+	local stale_tracking_sha
+	stale_tracking_sha=$(git -C "$repo" rev-parse refs/remotes/origin/feat/pub)
+	git -C "$origin" update-ref refs/heads/feat/pub refs/heads/main
+	local fresh_remote_sha
+	fresh_remote_sha=$(git -C "$origin" rev-parse feat/pub)
+	if [ "$fresh_remote_sha" = "$stale_tracking_sha" ]; then
+		printf '  FAIL S22.4: fixture bug -- fresh and stale shas should differ\n'
+		errors=$((errors + 1))
+	fi
+	local out_c expect_c
+	out_c=$(cd "$repo" && bash "${LIB}/publish.sh" "$run_dir")
+	expect_c=$(printf '%s' "$out_c" | jq -r '.expect_sha')
+	if [ "$expect_c" != "$fresh_remote_sha" ]; then
+		printf '  FAIL S22.5: expected the fresh remote sha (%s), got %s (stale local tracking ref was %s)\n' \
+			"$fresh_remote_sha" "$expect_c" "$stale_tracking_sha"
+		errors=$((errors + 1))
+	fi
+	# Revert the direct mutation so later cases in this fixture see a clean state.
+	git -C "$origin" update-ref refs/heads/feat/pub "$stale_tracking_sha"
+
+	# Case D: repo_root in run.json doesn't match the cwd's repo.
+	local other_repo="${TMP}/s22-other"
+	new_repo "$other_repo"
+	local out_d code_d
+	out_d=$(cd "$other_repo" && bash "${LIB}/publish.sh" "$run_dir" 2>&1)
+	code_d=$?
+	if [ "$code_d" -ne 50 ]; then
+		printf '  FAIL S22.6: expected exit 50 for repo_root mismatch, got %s: %s\n' "$code_d" "$out_d"
+		errors=$((errors + 1))
+	fi
+
+	# Case E: branch is main -- refuses.
+	local main_run="${TMP}/s22-main-run"
+	mkdir -p "$main_run"
+	jq '.branch = "main"' "${run_dir}/run.json" >"${main_run}/run.json"
+	local out_e code_e
+	out_e=$(cd "$repo" && bash "${LIB}/publish.sh" "$main_run" 2>&1)
+	code_e=$?
+	if [ "$code_e" -ne 51 ]; then
+		printf '  FAIL S22.7: expected exit 51 refusing main, got %s: %s\n' "$code_e" "$out_e"
+		errors=$((errors + 1))
+	fi
+
+	# Case F: branch tip no longer matches result.json's new_sha.
+	echo z >"${repo}/z.txt" && git -C "$repo" add z.txt && git -C "$repo" -c commit.gpgsign=false commit -q -m "feat: add z, not part of the verified run"
+	local out_f code_f
+	out_f=$(cd "$repo" && bash "${LIB}/publish.sh" "$run_dir" 2>&1)
+	code_f=$?
+	if [ "$code_f" -ne 52 ]; then
+		printf '  FAIL S22.8: expected exit 52 for new_sha mismatch, got %s: %s\n' "$code_f" "$out_f"
+		errors=$((errors + 1))
+	fi
+	git -C "$repo" reset -q --hard HEAD~1
+
+	# Grep invariant: no bare --force/-f as an actual flag, and no bare git-push
+	# invocation (only ever assigned into a command string, never executed).
+	if grep -v '^[[:space:]]*#' "${LIB}/publish.sh" | grep -qE -- '--force([^-]|$)'; then
+		printf '  FAIL S22.9: publish.sh must never construct a bare --force flag\n'
+		errors=$((errors + 1))
+	fi
+	if grep -qE '^[[:space:]]*git push' "${LIB}/publish.sh"; then
+		printf '  FAIL S22.10: publish.sh must never invoke git push itself\n'
+		errors=$((errors + 1))
+	fi
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S22: publish.sh (plain/lease modes, fresh-vs-stale sha, guard refusals, no-bare-force invariant)"
+	else
+		fail "S22: publish.sh (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
 # Run all
 # ---------------------------------------------------------------------------
 printf '=== anaiis-git-ops smoke tests ===\n'
@@ -1004,6 +1144,7 @@ s18
 s19
 s20
 s21
+s22
 
 printf '\nResults: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
