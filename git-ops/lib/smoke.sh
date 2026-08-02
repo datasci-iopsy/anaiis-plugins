@@ -783,6 +783,109 @@ s19() {
 }
 
 # ---------------------------------------------------------------------------
+# S20: abort-plan.sh. Only ever invoked after a human has explicitly chosen
+# "abort" following a Phase 4-5 failure -- never automatic on failure
+# detection. Covers: refusal when not on the tmp branch, successful abort
+# after an exit-32 hook failure (tag deleted since it's redundant -- same
+# sha as the untouched branch), residual untracked state reported rather
+# than hidden, and abort-then-retry actually succeeding (exit 0), proving
+# the exit-30 relaxation from the previous commit closes the loop.
+# ---------------------------------------------------------------------------
+s20() {
+	local errors=0
+	local repo="${TMP}/s20"
+	new_repo "$repo"
+	echo a >"${repo}/a.txt" && git -C "$repo" add a.txt && git -C "$repo" commit -q -m "chore: init"
+	git -C "$repo" checkout -q -b feat/abort
+	echo x >"${repo}/x.txt" && git -C "$repo" add x.txt && git -C "$repo" commit -q -m "feat: add x"
+	local x_sha
+	x_sha=$(git -C "$repo" rev-parse HEAD)
+
+	# Refusal: not on the tmp branch at all (e.g. called with a fresh/unrelated
+	# run_dir, or before any Phase 4-5 attempt ever ran).
+	local state_out run_dir
+	state_out=$(cd "$repo" && bash "${LIB}/git-state.sh" feat/abort main)
+	run_dir=$(printf '%s' "$state_out" | jq -r '.run_dir')
+	local refuse_code
+	(cd "$repo" && bash "${LIB}/abort-plan.sh" "$run_dir" >/dev/null 2>&1)
+	refuse_code=$?
+	if [ "$refuse_code" -eq 0 ]; then
+		printf '  FAIL S20.1: abort-plan.sh should refuse when HEAD is not on the tmp branch\n'
+		errors=$((errors + 1))
+	fi
+
+	# A hook that fails AND drops an untracked artifact (e.g. a lint cache file),
+	# so the residual-status assertion below is a real, not hypothetical, case.
+	mkdir -p "${repo}/.git/hooks"
+	printf '#!/usr/bin/env bash\necho "residue" > "%s/.lint-cache"\necho "simulated lint failure" >&2\nexit 1\n' "$repo" >"${repo}/.git/hooks/pre-commit"
+	chmod +x "${repo}/.git/hooks/pre-commit"
+
+	cat >"${run_dir}/plan.json" <<PLAN
+{"groups": [{"message": "feat: add x", "commits": ["${x_sha}"], "files": ["x.txt"]}], "flagged": [], "rationale": "smoke fixture"}
+PLAN
+	(cd "$repo" && bash "${LIB}/apply-plan.sh" "$run_dir" >/dev/null 2>&1)
+	local apply_code=$?
+	if [ "$apply_code" -ne 32 ]; then
+		printf '  FAIL S20.2: expected exit 32 to set up the abort scenario, got %s\n' "$apply_code"
+		errors=$((errors + 1))
+	fi
+
+	local abort_out
+	abort_out=$(cd "$repo" && bash "${LIB}/abort-plan.sh" "$run_dir")
+	local abort_code=$?
+	if [ "$abort_code" -ne 0 ]; then
+		printf '  FAIL S20.3: abort-plan.sh expected exit 0, got %s: %s\n' "$abort_code" "$abort_out"
+		errors=$((errors + 1))
+	fi
+
+	local head_ref
+	head_ref=$(git -C "$repo" symbolic-ref --quiet HEAD)
+	if [ "$head_ref" != "refs/heads/feat/abort" ]; then
+		printf '  FAIL S20.4: HEAD should be back on feat/abort, got %s\n' "$head_ref"
+		errors=$((errors + 1))
+	fi
+	if git -C "$repo" rev-parse -q --verify "refs/heads/tmp/rebase-feat/abort" >/dev/null; then
+		printf '  FAIL S20.5: tmp branch should be deleted after abort\n'
+		errors=$((errors + 1))
+	fi
+	local tag_deleted
+	tag_deleted=$(printf '%s' "$abort_out" | jq -r '.tag_deleted')
+	if [ "$tag_deleted" != "true" ]; then
+		printf '  FAIL S20.6: safety tag should be deleted (redundant -- branch sha unchanged), got tag_deleted=%s\n' "$tag_deleted"
+		errors=$((errors + 1))
+	fi
+	if git -C "$repo" rev-parse -q --verify "refs/tags/safety/pre-rebase-feat/abort" >/dev/null; then
+		printf '  FAIL S20.7: safety tag should actually be gone\n'
+		errors=$((errors + 1))
+	fi
+	local residual
+	residual=$(printf '%s' "$abort_out" | jq -r '.residual_status')
+	if ! printf '%s' "$residual" | grep -q '.lint-cache'; then
+		printf '  FAIL S20.8: residual_status should report the hook-dropped .lint-cache artifact, got: %s\n' "$residual"
+		errors=$((errors + 1))
+	fi
+	rm -f "${repo}/.lint-cache"
+
+	# Abort-then-retry (the "fix and retry" branch of the three-way choice --
+	# remove the offending hook, simulating the fix): the exit-30 relaxation
+	# must let this succeed now instead of hitting exit 30 again.
+	rm -f "${repo}/.git/hooks/pre-commit"
+	local retry_out retry_code
+	retry_out=$(cd "$repo" && bash "${LIB}/apply-plan.sh" "$run_dir" 2>&1)
+	retry_code=$?
+	if [ "$retry_code" -ne 0 ]; then
+		printf '  FAIL S20.9: retry after abort expected exit 0, got %s: %s\n' "$retry_code" "$retry_out"
+		errors=$((errors + 1))
+	fi
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S20: abort-plan.sh (refusal, successful abort, tag logic, residual reporting, abort-then-retry)"
+	else
+		fail "S20: abort-plan.sh (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
 # S21: apply-plan.sh exit 35 (compare-and-swap failure -- the branch moved
 # externally, out from under this run, between capture and swap). A
 # post-commit hook fires during the group-commit loop (which commits onto the
@@ -841,8 +944,36 @@ PLAN
 		errors=$((errors + 1))
 	fi
 
+	# The naive fix for exit 35 ("git reset --hard safety/pre-rebase-<branch>")
+	# would destroy the very external change that caused the CAS failure --
+	# abort-plan.sh must instead leave the moved branch alone and preserve the
+	# tag, since branch sha != tag sha here (unlike the 32/33 case in S20).
+	local abort_out abort_code
+	abort_out=$(cd "$repo" && bash "${LIB}/abort-plan.sh" "$run_dir")
+	abort_code=$?
+	if [ "$abort_code" -ne 0 ]; then
+		printf '  FAIL S21.6: abort-plan.sh expected exit 0 at exit-35 state, got %s: %s\n' "$abort_code" "$abort_out"
+		errors=$((errors + 1))
+	fi
+	local tag_deleted
+	tag_deleted=$(printf '%s' "$abort_out" | jq -r '.tag_deleted')
+	if [ "$tag_deleted" != "false" ]; then
+		printf '  FAIL S21.7: safety tag must NOT be deleted at exit 35 (branch moved externally), got tag_deleted=%s\n' "$tag_deleted"
+		errors=$((errors + 1))
+	fi
+	if ! git -C "$repo" rev-parse -q --verify "refs/tags/safety/pre-rebase-feat/cas35" >/dev/null; then
+		printf '  FAIL S21.8: safety tag should still exist after abort at exit 35\n'
+		errors=$((errors + 1))
+	fi
+	local post_abort_sha
+	post_abort_sha=$(git -C "$repo" rev-parse feat/cas35)
+	if [ "$post_abort_sha" != "$main_sha" ]; then
+		printf '  FAIL S21.9: abort must not touch the externally-moved branch, expected %s, got %s\n' "$main_sha" "$post_abort_sha"
+		errors=$((errors + 1))
+	fi
+
 	if [ "$errors" -eq 0 ]; then
-		pass "S21: apply-plan.sh exit 35 (CAS failure, Recovery line, tag+tmp preserved)"
+		pass "S21: apply-plan.sh exit 35 + abort-plan.sh (CAS failure, Recovery line, tag survives)"
 	else
 		fail "S21: apply-plan.sh exit 35 (${errors} checks failed)"
 	fi
@@ -871,6 +1002,7 @@ s16
 s17
 s18
 s19
+s20
 s21
 
 printf '\nResults: %d passed, %d failed\n' "$PASS" "$FAIL"
