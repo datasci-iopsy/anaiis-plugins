@@ -344,7 +344,19 @@ PLAN
 		return
 	fi
 
-	pass "S11: apply-plan.sh clean reconstruction (final-state-wins, deletion, 3 commits)"
+	if [ ! -f "${run_dir}/result.json" ]; then
+		fail "S11: apply-plan.sh should write result.json on success"
+		return
+	fi
+	local result_new_sha branch_sha
+	result_new_sha=$(jq -r '.new_sha' "${run_dir}/result.json")
+	branch_sha=$(git -C "$repo" rev-parse feat/full)
+	if [ "$result_new_sha" != "$branch_sha" ]; then
+		fail "S11: result.json new_sha (${result_new_sha}) should match feat/full's tip (${branch_sha})"
+		return
+	fi
+
+	pass "S11: apply-plan.sh clean reconstruction (final-state-wins, deletion, 3 commits, result.json)"
 }
 
 # ---------------------------------------------------------------------------
@@ -420,6 +432,20 @@ PLAN
 		return
 	fi
 	pass "S13: apply-plan.sh pre-commit hook failure (exit 32, hook output surfaced)"
+
+	# S13.2: same failing hook, but with explicit human-approved --no-verify opt-in.
+	# The failed attempt above left tmp/rebase-feat/hook checked out; switch back
+	# to the real branch before deleting it, same as abort-plan.sh will do.
+	git -C "$repo" switch -q --force feat/hook
+	git -C "$repo" branch -D "tmp/rebase-feat/hook" >/dev/null 2>&1 || true
+	local noverify_out
+	noverify_out=$(cd "$repo" && APPLY_PLAN_NO_VERIFY=1 bash "${LIB}/apply-plan.sh" "$run_dir" 2>&1)
+	local noverify_code=$?
+	if [ "$noverify_code" -ne 0 ]; then
+		fail "S13.2: apply-plan.sh with APPLY_PLAN_NO_VERIFY=1 expected exit 0 (hook skipped), got ${noverify_code}: ${noverify_out}"
+		return
+	fi
+	pass "S13.2: apply-plan.sh APPLY_PLAN_NO_VERIFY=1 skips a failing hook when explicitly opted in"
 }
 
 # ---------------------------------------------------------------------------
@@ -441,7 +467,10 @@ s14() {
 {"groups": [{"message": "feat: add x", "commits": ["${x_sha}"], "files": ["x.txt"]}], "flagged": [], "rationale": "smoke fixture"}
 PLAN
 
-	git -C "$repo" tag "safety/pre-rebase-feat/collide"
+	# Tag points at main's tip, not head_sha -- a real collision (some unrelated
+	# tag with this name), distinct from S14.3 below (a stale tag from this
+	# same run, which must not block a retry).
+	git -C "$repo" tag "safety/pre-rebase-feat/collide" main
 	(cd "$repo" && bash "${LIB}/apply-plan.sh" "$run_dir" >/dev/null 2>&1)
 	local tag_code=$?
 	if [ "$tag_code" -ne 30 ]; then
@@ -457,7 +486,23 @@ PLAN
 		fail "S14: apply-plan.sh tmp-branch collision expected exit 31, got ${tmp_code}"
 		return
 	fi
+	git -C "$repo" branch -D "tmp/rebase-feat/collide" >/dev/null
 	pass "S14: apply-plan.sh safety-tag and tmp-branch collision guards (exit 30, 31)"
+
+	# S14.3: a stale tag pointing at the SAME head_sha this run would tag anyway
+	# (e.g. left over from an aborted attempt) must not block a retry -- only a
+	# tag pointing elsewhere is a real collision.
+	local head_sha
+	head_sha=$(git -C "$repo" rev-parse feat/collide)
+	git -C "$repo" tag "safety/pre-rebase-feat/collide" "$head_sha"
+	local same_out
+	same_out=$(cd "$repo" && bash "${LIB}/apply-plan.sh" "$run_dir" 2>&1)
+	local same_code=$?
+	if [ "$same_code" -ne 0 ]; then
+		fail "S14.3: apply-plan.sh should proceed when the stale tag already points at head_sha, got exit ${same_code}: ${same_out}"
+		return
+	fi
+	pass "S14.3: apply-plan.sh proceeds when a stale safety tag already points at head_sha"
 }
 
 # ---------------------------------------------------------------------------
@@ -738,6 +783,72 @@ s19() {
 }
 
 # ---------------------------------------------------------------------------
+# S21: apply-plan.sh exit 35 (compare-and-swap failure -- the branch moved
+# externally, out from under this run, between capture and swap). A
+# post-commit hook fires during the group-commit loop (which commits onto the
+# tmp branch) and force-moves the real branch to a different sha, simulating
+# something else changing it mid-run. Isolated under a fake HOME so run dirs
+# don't land in the real ~/.claude/anaiis-git-ops/runs.
+# ---------------------------------------------------------------------------
+s21() {
+	local errors=0
+	local fake_home="${TMP}/s21-home"
+	mkdir -p "$fake_home"
+	local repo="${TMP}/s21-repo"
+	new_repo "$repo"
+	echo a >"${repo}/a.txt" && git -C "$repo" add a.txt && git -C "$repo" commit -q -m "chore: init"
+	git -C "$repo" checkout -q -b feat/cas35
+	echo x >"${repo}/x.txt" && git -C "$repo" add x.txt && git -C "$repo" commit -q -m "feat: add x"
+	local x_sha
+	x_sha=$(git -C "$repo" rev-parse HEAD)
+	local main_sha
+	main_sha=$(git -C "$repo" rev-parse main)
+
+	mkdir -p "${repo}/.git/hooks"
+	printf '#!/usr/bin/env bash\ngit update-ref refs/heads/feat/cas35 %s\nexit 0\n' "$main_sha" >"${repo}/.git/hooks/post-commit"
+	chmod +x "${repo}/.git/hooks/post-commit"
+
+	local state_out run_dir
+	state_out=$(cd "$repo" && HOME="$fake_home" bash "${LIB}/git-state.sh" feat/cas35 main)
+	run_dir=$(printf '%s' "$state_out" | jq -r '.run_dir')
+	cat >"${run_dir}/plan.json" <<PLAN
+{"groups": [{"message": "feat: add x", "commits": ["${x_sha}"], "files": ["x.txt"]}], "flagged": [], "rationale": "smoke fixture"}
+PLAN
+
+	local err code
+	err=$(cd "$repo" && HOME="$fake_home" bash "${LIB}/apply-plan.sh" "$run_dir" 2>&1 1>/dev/null)
+	code=$?
+	if [ "$code" -ne 35 ]; then
+		printf '  FAIL S21.1: expected exit 35, got %s: %s\n' "$code" "$err"
+		errors=$((errors + 1))
+	fi
+	if ! printf '%s' "$err" | grep -q 'Recovery: git switch --force feat/cas35 && git branch -D tmp/rebase-feat/cas35'; then
+		printf '  FAIL S21.2: expected a Recovery line for exit 35, got: %s\n' "$err"
+		errors=$((errors + 1))
+	fi
+	if ! git -C "$repo" rev-parse -q --verify "refs/tags/safety/pre-rebase-feat/cas35" >/dev/null; then
+		printf '  FAIL S21.3: safety tag should be preserved after exit 35\n'
+		errors=$((errors + 1))
+	fi
+	if ! git -C "$repo" rev-parse -q --verify "refs/heads/tmp/rebase-feat/cas35" >/dev/null; then
+		printf '  FAIL S21.4: tmp branch should be preserved after exit 35\n'
+		errors=$((errors + 1))
+	fi
+	local moved_sha
+	moved_sha=$(git -C "$repo" rev-parse feat/cas35)
+	if [ "$moved_sha" != "$main_sha" ]; then
+		printf '  FAIL S21.5: feat/cas35 should still be at the externally-moved sha (%s), got %s\n' "$main_sha" "$moved_sha"
+		errors=$((errors + 1))
+	fi
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S21: apply-plan.sh exit 35 (CAS failure, Recovery line, tag+tmp preserved)"
+	else
+		fail "S21: apply-plan.sh exit 35 (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
 # Run all
 # ---------------------------------------------------------------------------
 printf '=== anaiis-git-ops smoke tests ===\n'
@@ -760,6 +871,7 @@ s16
 s17
 s18
 s19
+s21
 
 printf '\nResults: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
