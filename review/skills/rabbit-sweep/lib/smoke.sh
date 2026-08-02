@@ -356,6 +356,16 @@ s5() {
 		errors=$((errors + 1))
 	fi
 
+	# code-surgeon must have Bash and a self-test obligation for touched test files.
+	if ! grep -q '^[[:space:]]*-[[:space:]]*Bash[[:space:]]*$' "$plugin_surgeon" 2>/dev/null; then
+		printf '  FAIL S5.6: code-surgeon.md tools frontmatter missing Bash\n'
+		errors=$((errors + 1))
+	fi
+	if ! grep -qi "the project.s test command" "$plugin_surgeon" 2>/dev/null; then
+		printf '  FAIL S5.7: code-surgeon.md missing self-test obligation instruction\n'
+		errors=$((errors + 1))
+	fi
+
 	if [ "$errors" -eq 0 ]; then
 		pass "S5: agent contracts present"
 	else
@@ -451,8 +461,40 @@ s6() {
 		errors=$((errors + 1))
 	fi
 
+	# 9. Literal "null" line args (the shape a naive jq interpolation of a
+	# missing field produces) -> FAIL preflight:bad-line-args, not an
+	# unbound-variable crash.
+	if reason=$(INTENT_PREFLIGHT_DIFF="${fixtures}/edit-touches-named-file.diff" \
+		bash "$preflight" "R/analysis.R" null null 2>&1); then
+		printf '  FAIL S6.9: null null line args should fail preflight\n'
+		errors=$((errors + 1))
+	elif [ "$reason" != "preflight:bad-line-args" ]; then
+		printf '  FAIL S6.9: wrong reason (got %s, want preflight:bad-line-args)\n' "$reason"
+		errors=$((errors + 1))
+	fi
+
+	# 10. Empty-string line args -> FAIL preflight:bad-line-args.
+	if reason=$(INTENT_PREFLIGHT_DIFF="${fixtures}/edit-touches-named-file.diff" \
+		bash "$preflight" "R/analysis.R" "" "" 2>&1); then
+		printf '  FAIL S6.10: empty-string line args should fail preflight\n'
+		errors=$((errors + 1))
+	elif [ "$reason" != "preflight:bad-line-args" ]; then
+		printf '  FAIL S6.10: wrong reason (got %s, want preflight:bad-line-args)\n' "$reason"
+		errors=$((errors + 1))
+	fi
+
+	# 11. Non-numeric line args -> FAIL preflight:bad-line-args.
+	if reason=$(INTENT_PREFLIGHT_DIFF="${fixtures}/edit-touches-named-file.diff" \
+		bash "$preflight" "R/analysis.R" abc def 2>&1); then
+		printf '  FAIL S6.11: non-numeric line args should fail preflight\n'
+		errors=$((errors + 1))
+	elif [ "$reason" != "preflight:bad-line-args" ]; then
+		printf '  FAIL S6.11: wrong reason (got %s, want preflight:bad-line-args)\n' "$reason"
+		errors=$((errors + 1))
+	fi
+
 	if [ "$errors" -eq 0 ]; then
-		pass "S6: intent-preflight (8 fixture checks: 3 pass, 5 fail-with-reason)"
+		pass "S6: intent-preflight (11 fixture checks: 3 pass, 8 fail-with-reason)"
 	else
 		fail "S6: intent-preflight (${errors} checks failed)"
 	fi
@@ -499,14 +541,37 @@ s7() {
 		errors=$((errors + 1))
 	fi
 
-	# Verifier must be read-only: Edit and Bash are forbidden in the tools list
-	if grep -qE '^\s+- (Edit|Bash)' "$verifier"; then
-		printf '  FAIL S7.5: intent-verifier.md has write-capable tool (Edit or Bash); verifier must be read-only\n'
+	# Verifier must never be able to edit files directly. Bash is now permitted (A3) but
+	# scoped to verification only -- checked below, not forbidden outright.
+	if grep -qE '^[[:space:]]+- Edit[[:space:]]*$' "$verifier"; then
+		printf '  FAIL S7.5: intent-verifier.md has Edit in its tools list; verifier must never write files\n'
+		errors=$((errors + 1))
+	fi
+
+	# Bash grant (A3): required so the verifier can run tests instead of guessing statically.
+	if ! grep -qE '^[[:space:]]+- Bash[[:space:]]*$' "$verifier"; then
+		printf '  FAIL S7.6: intent-verifier.md tools frontmatter missing Bash\n'
+		errors=$((errors + 1))
+	fi
+
+	# Bash usage must be explicitly scoped to verification only, not general-purpose.
+	if ! grep -qi 'verification only' "$verifier"; then
+		printf '  FAIL S7.7: intent-verifier.md missing a verification-only Bash usage contract\n'
+		errors=$((errors + 1))
+	fi
+	if ! grep -qi 'mutating git command' "$verifier"; then
+		printf '  FAIL S7.7: intent-verifier.md Bash contract missing the no-mutating-git-command rule\n'
+		errors=$((errors + 1))
+	fi
+
+	# Sharpened failure-mode bias: no-Bash-or-not-executable + test file/new symbol must abstain.
+	if ! grep -qi 'cannot execute' "$verifier"; then
+		printf '  FAIL S7.8: intent-verifier.md missing the cannot-execute abstain rationale\n'
 		errors=$((errors + 1))
 	fi
 
 	if [ "$errors" -eq 0 ]; then
-		pass "S7: intent-verifier agent contract (model tier, output format, bias directives)"
+		pass "S7: intent-verifier agent contract (model tier, output format, bias directives, scoped Bash)"
 	else
 		fail "S7: intent-verifier contract (${errors} sentinel checks failed)"
 	fi
@@ -776,8 +841,30 @@ s10() {
 		fi
 	fi
 
+	# 5. line_start/line_end are sourced from the CLI's own startLine/endLine,
+	# not discarded to null. mixed-severities.ndjson carries startLine:10,
+	# endLine:10 for a.R and startLine:22, endLine:25 for b.R.
+	if out=$(FAKE_CODERABBIT_FIXTURE="${fixtures}/mixed-severities.ndjson" PATH="${fakebin}:${PATH}" bash "$run" "main" 2>/dev/null); then
+		local ls_a le_a ls_b le_b
+		ls_a=$(printf '%s\n' "$out" | jq -c 'select(.file=="a.R") | .line_start')
+		le_a=$(printf '%s\n' "$out" | jq -c 'select(.file=="a.R") | .line_end')
+		ls_b=$(printf '%s\n' "$out" | jq -c 'select(.file=="b.R") | .line_start')
+		le_b=$(printf '%s\n' "$out" | jq -c 'select(.file=="b.R") | .line_end')
+		if [ "$ls_a" != "10" ] || [ "$le_a" != "10" ]; then
+			printf '  FAIL S10.5: expected a.R line_start=10 line_end=10, got line_start=%s line_end=%s\n' "$ls_a" "$le_a"
+			errors=$((errors + 1))
+		fi
+		if [ "$ls_b" != "22" ] || [ "$le_b" != "25" ]; then
+			printf '  FAIL S10.5: expected b.R line_start=22 line_end=25, got line_start=%s line_end=%s\n' "$ls_b" "$le_b"
+			errors=$((errors + 1))
+		fi
+	else
+		printf '  FAIL S10.5: expected exit 0 for mixed-severities fixture\n'
+		errors=$((errors + 1))
+	fi
+
 	if [ "$errors" -eq 0 ]; then
-		pass "S10: run-review.sh error-event handling + expanded severity mapping (4 checks)"
+		pass "S10: run-review.sh error-event handling + expanded severity mapping (5 checks)"
 	else
 		fail "S10: run-review.sh (${errors} checks failed)"
 	fi
@@ -1264,6 +1351,615 @@ s15() {
 }
 
 # ---------------------------------------------------------------------------
+# S16: dispatch reconciliation -- ledger_surgeon_dispatched / ledger_undispatched_fixes
+# catch a decision:"fix" with no matching surgeon dispatch (A4), and
+# ledger_sweep_ran records the reconciliation sweep for audit.
+# ---------------------------------------------------------------------------
+s16() {
+	local ledger="${TMP}/s16.jsonl"
+	export LEDGER="$ledger"
+	# shellcheck source=lib/ledger.sh
+	source "${LIB}/ledger.sh"
+	LEDGER_DIR="$TMP"
+	: >"$ledger"
+
+	local errors=0
+
+	ledger_decision "CLI-1" 4 "fix" "severity 4: fix without triage" true
+	ledger_decision "CLI-2" 4 "fix" "severity 4: fix without triage" true
+	ledger_surgeon_dispatched "CLI-2"
+
+	local undispatched
+	undispatched=$(ledger_undispatched_fixes)
+	if [ "$undispatched" != "CLI-1" ]; then
+		printf '  FAIL S16.1: expected only CLI-1 undispatched, got: %s\n' "$undispatched"
+		errors=$((errors + 1))
+	fi
+
+	ledger_surgeon_dispatched "CLI-1"
+	undispatched=$(ledger_undispatched_fixes)
+	if [ -n "$undispatched" ]; then
+		printf '  FAIL S16.2: expected no undispatched fixes after dispatching CLI-1, got: %s\n' "$undispatched"
+		errors=$((errors + 1))
+	fi
+
+	ledger_sweep_ran 1
+	if ! grep -q '"event":"sweep_ran","count":1' "$ledger"; then
+		printf '  FAIL S16.3: expected a sweep_ran event with count 1\n'
+		errors=$((errors + 1))
+	fi
+
+	undispatched=$(ledger_undispatched_fixes)
+	if [ -z "$undispatched" ]; then
+		ledger_sweep_ran 0
+		if ! grep -q '"event":"sweep_ran","count":0' "$ledger"; then
+			printf '  FAIL S16.4: expected a sweep_ran event with count 0 for clean sweep\n'
+			errors=$((errors + 1))
+		fi
+	fi
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S16: dispatch reconciliation (undispatched-fix detection, sweep audit event)"
+	else
+		fail "S16: dispatch reconciliation (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# S17: round-scoped ledger ids (A5) -- the same CodeRabbit id reused across two
+# rounds becomes two distinct, auditable ledger ids. Structural check confirms
+# phases.md carries the rewrite in both Phase 3 and Phase 7 (local mode only);
+# the correctness fixture proves the pattern itself is sound and that PR-mode
+# ids (never touched by this rewrite) still resolve through ledger_handled_ids.
+# ---------------------------------------------------------------------------
+s17() {
+	local errors=0
+	local phases="${SKILL_ROOT}/references/phases.md"
+	local scope_pattern='"R" + ($round|tostring) + "-" + .id'
+
+	local scope_count
+	scope_count=$(grep -cF "$scope_pattern" "$phases" 2>/dev/null) || scope_count=0
+	if [ "$scope_count" -lt 2 ]; then
+		printf '  FAIL S17.1: expected the round-scoping id rewrite in both Phase 3 and Phase 7 of phases.md, found %s occurrence(s)\n' "$scope_count"
+		errors=$((errors + 1))
+	fi
+	if ! grep -q "local-mode only\|Local mode only" "$phases" 2>/dev/null; then
+		printf '  FAIL S17.2: phases.md missing an explicit local-mode-only note near the id rewrite\n'
+		errors=$((errors + 1))
+	fi
+
+	# Correctness fixture: the same restarting CodeRabbit id across two rounds.
+	local round1="${TMP}/s17-round1.ndjson"
+	printf '{"id":"CLI-1","file":"a.R","severity":4}\n' >"$round1"
+	jq -c --argjson round 1 '.id = ("R" + ($round|tostring) + "-" + .id)' "$round1" \
+		>"${round1}.scoped"
+
+	local round2="${TMP}/s17-round2.ndjson"
+	printf '{"id":"CLI-1","file":"b.R","severity":3}\n' >"$round2"
+	jq -c --argjson round 2 '.id = ("R" + ($round|tostring) + "-" + .id)' "$round2" \
+		>"${round2}.scoped"
+
+	local id1 id2
+	id1=$(jq -r '.id' "${round1}.scoped")
+	id2=$(jq -r '.id' "${round2}.scoped")
+
+	if [ "$id1" != "R1-CLI-1" ]; then
+		printf '  FAIL S17.3: expected round 1 id R1-CLI-1, got %s\n' "$id1"
+		errors=$((errors + 1))
+	fi
+	if [ "$id2" != "R2-CLI-1" ]; then
+		printf '  FAIL S17.3: expected round 2 id R2-CLI-1, got %s\n' "$id2"
+		errors=$((errors + 1))
+	fi
+	if [ "$id1" = "$id2" ]; then
+		printf '  FAIL S17.4: round 1 and round 2 ids collided after scoping: %s\n' "$id1"
+		errors=$((errors + 1))
+	fi
+
+	# Feed both scoped ids through the ledger and confirm they are distinct, auditable entries.
+	local ledger="${TMP}/s17.jsonl"
+	export LEDGER="$ledger"
+	# shellcheck source=lib/ledger.sh
+	source "${LIB}/ledger.sh"
+	LEDGER_DIR="$TMP"
+	: >"$ledger"
+	ledger_decision "$id1" 4 "fix" "round 1 finding" true
+	ledger_decision "$id2" 3 "fix" "round 2 finding" true
+
+	local unique_ids
+	unique_ids=$(jq -r 'select(.event=="decision") | .id' "$ledger" | sort -u | wc -l | tr -d ' ')
+	if [ "$unique_ids" -ne 2 ]; then
+		printf '  FAIL S17.5: expected 2 distinct decision ids in the ledger, got %s\n' "$unique_ids"
+		errors=$((errors + 1))
+	fi
+
+	# PR-mode regression guard: this rewrite must never run in PR mode, and
+	# ledger_handled_ids' PR-id matching must still work unaffected by it.
+	: >"$ledger"
+	printf '{"event":"intent_verified","id":"PR-77-501"}\n' >>"$ledger"
+	local handled
+	handled=$(ledger_handled_ids 77)
+	if ! printf '%s\n' "$handled" | grep -qxF "PR-77-501"; then
+		printf '  FAIL S17.6: PR-mode id PR-77-501 no longer resolves through ledger_handled_ids\n'
+		errors=$((errors + 1))
+	fi
+
+	rm -f "${round1}.scoped" "${round2}.scoped"
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S17: round-scoped ledger ids (distinct across rounds, PR-mode ids unaffected)"
+	else
+		fail "S17: round-scoped ledger ids (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# S18: fingerprint + prior-verdict short-circuit (A6) -- a repeat sev-3+
+# finding (same file + suggestion, different round/id) resolves from a prior
+# **skip** verdict without a fresh triage spawn. A prior "fix" verdict is
+# never reused this way (see phases.md Phase 4): a fixture below asserts the
+# reuse condition rejects a "fix" verdict, and the skip-only restriction is
+# also checked structurally, scoped to the Phase 4 section.
+# ---------------------------------------------------------------------------
+s18() {
+	local errors=0
+	local ledger="${TMP}/s18.jsonl"
+	export LEDGER="$ledger"
+	# shellcheck source=lib/ledger.sh
+	source "${LIB}/ledger.sh"
+	LEDGER_DIR="$TMP"
+	: >"$ledger"
+
+	local fp
+	fp=$(ledger_fingerprint "runs.yaml" "add speculative max_num_rows field")
+
+	# Round 1: CLI-9 rejects the speculative field.
+	ledger_decision "R1-CLI-9" 4 "skip" "no consumer exists" "" "$fp"
+
+	if ! grep -q "\"fingerprint\":\"${fp}\"" "$ledger"; then
+		printf '  FAIL S18.1: expected the decision event to carry fingerprint %s\n' "$fp"
+		errors=$((errors + 1))
+	fi
+
+	# Round 2: the same substantive question resurfaces under a different id.
+	local verdict
+	verdict=$(ledger_prior_verdict "$fp")
+	if [ -z "$verdict" ]; then
+		printf '  FAIL S18.2: expected a prior verdict for fingerprint %s, got none\n' "$fp"
+		errors=$((errors + 1))
+	else
+		local prior_decision prior_id
+		prior_decision=$(printf '%s' "$verdict" | jq -r '.decision')
+		prior_id=$(printf '%s' "$verdict" | jq -r '.id')
+		if [ "$prior_decision" != "skip" ]; then
+			printf '  FAIL S18.3: expected prior decision "skip", got %s\n' "$prior_decision"
+			errors=$((errors + 1))
+		fi
+		if [ "$prior_id" != "R1-CLI-9" ]; then
+			printf '  FAIL S18.4: expected prior id R1-CLI-9, got %s\n' "$prior_id"
+			errors=$((errors + 1))
+		fi
+	fi
+
+	# A different fingerprint (no prior history) must return nothing.
+	local no_prior
+	no_prior=$(ledger_prior_verdict "0000000000000000000000000000000000000000")
+	if [ -n "$no_prior" ]; then
+		printf '  FAIL S18.5: expected no prior verdict for an unseen fingerprint, got: %s\n' "$no_prior"
+		errors=$((errors + 1))
+	fi
+
+	# A prior "fix" verdict for a fingerprint must be rejected by the reuse
+	# condition: ledger_prior_verdict surfaces it plainly, and the documented
+	# short-circuit condition (.decision == "skip") must evaluate false for it.
+	local fp_fix
+	fp_fix=$(ledger_fingerprint "other.yaml" "add another speculative field")
+	ledger_decision "R1-CLI-10" 3 "fix" "needed after all" true "$fp_fix"
+
+	local fix_verdict
+	fix_verdict=$(ledger_prior_verdict "$fp_fix")
+	if [ -z "$fix_verdict" ]; then
+		printf '  FAIL S18.6: expected a prior verdict for fingerprint %s, got none\n' "$fp_fix"
+		errors=$((errors + 1))
+	else
+		local fix_prior_decision
+		fix_prior_decision=$(printf '%s' "$fix_verdict" | jq -r '.decision')
+		if [ "$fix_prior_decision" != "fix" ]; then
+			printf '  FAIL S18.7: expected prior decision "fix", got %s\n' "$fix_prior_decision"
+			errors=$((errors + 1))
+		fi
+		if [ "$fix_prior_decision" = "skip" ]; then
+			printf '  FAIL S18.8: fingerprint reuse condition incorrectly accepted a "fix" verdict as reusable\n'
+			errors=$((errors + 1))
+		fi
+	fi
+
+	# A repeat sev-3+ finding whose fingerprint matches a prior skip, but whose
+	# target file's content hash differs from what was recorded with that
+	# decision (e.g. a later fix touched the same file), must not be reused --
+	# the caller falls through to coderabbit-triage instead of short-circuiting.
+	local fp_hash
+	fp_hash=$(ledger_fingerprint "hashed.yaml" "same finding text, file content changed later")
+	ledger_decision "R1-CLI-11" 3 "skip" "no consumer exists" "" "$fp_hash" "hash_v1"
+
+	local hash_verdict
+	hash_verdict=$(ledger_prior_verdict "$fp_hash")
+	if [ -z "$hash_verdict" ]; then
+		printf '  FAIL S18.11: expected a prior verdict for fingerprint %s, got none\n' "$fp_hash"
+		errors=$((errors + 1))
+	else
+		local prior_file_hash current_hash
+		prior_file_hash=$(printf '%s' "$hash_verdict" | jq -r '.file_hash // empty')
+		if [ "$prior_file_hash" != "hash_v1" ]; then
+			printf '  FAIL S18.12: expected prior file_hash "hash_v1", got %s\n' "$prior_file_hash"
+			errors=$((errors + 1))
+		fi
+		# Simulate the target file's content having changed since the skip was recorded.
+		current_hash="hash_v2"
+		if [ "$current_hash" = "$prior_file_hash" ]; then
+			printf '  FAIL S18.13: current file hash unexpectedly matched a deliberately different prior hash -- reuse would be incorrectly accepted\n'
+			errors=$((errors + 1))
+		fi
+	fi
+
+	# Structural: Phase 4 (scoped to its own section) must restrict the
+	# short-circuit to prior "skip" verdicts only.
+	local phases="${SKILL_ROOT}/references/phases.md"
+	local phase4_section
+	phase4_section=$(awk '/^## Phase 4/{flag=1; next} /^## Phase [0-9]/{if (flag) exit} flag' "$phases" 2>/dev/null)
+	if ! printf '%s' "$phase4_section" | grep -qi 'prior skip\|skip verdict'; then
+		printf '  FAIL S18.9: Phase 4 section missing a skip-only restriction near the fingerprint short-circuit\n'
+		errors=$((errors + 1))
+	fi
+	if ! printf '%s' "$phase4_section" | grep -q 'ledger_prior_verdict'; then
+		printf '  FAIL S18.10: Phase 4 section does not reference ledger_prior_verdict\n'
+		errors=$((errors + 1))
+	fi
+	if ! printf '%s' "$phase4_section" | grep -qi 'file_hash\|hash_object'; then
+		printf '  FAIL S18.14: Phase 4 section missing a file-content-hash check gating skip reuse\n'
+		errors=$((errors + 1))
+	fi
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S18: fingerprint short-circuit (prior skip verdict reused, unseen fingerprint empty)"
+	else
+		fail "S18: fingerprint short-circuit (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# S19: replay-corpus.sh -- synthetic corpus under isolated roots (never touches
+# real ~/.coderabbit or ~/.claude/rabbit-sweep). A planted round-2 finding on
+# the same file+line as a round-1 finding must be detected as a re-flag; round
+# 1 itself (no prior round to compare against) must always report zero. A
+# session with an unresolvable HEAD must be skipped with a reason, never
+# silently dropped.
+# ---------------------------------------------------------------------------
+s19() {
+	local replay="${LIB}/replay-corpus.sh"
+	local errors=0
+
+	local repo="${TMP}/s19-repo"
+	rm -rf "$repo"
+	mkdir -p "$repo"
+	(
+		cd "$repo"
+		git init -q
+		git config user.email "smoke@rabbit-sweep.test"
+		git config user.name "rabbit-sweep smoke"
+		git commit -q --allow-empty -m c0
+	)
+	local c0 c1 c2
+	c0=$(git -C "$repo" rev-parse HEAD)
+	(cd "$repo" && git commit -q --allow-empty -m c1)
+	c1=$(git -C "$repo" rev-parse HEAD)
+	(cd "$repo" && git commit -q --allow-empty -m c2)
+	c2=$(git -C "$repo" rev-parse HEAD)
+
+	local reviews_root="${TMP}/s19-reviews" ledger_root="${TMP}/s19-ledgers" out_dir="${TMP}/s19-out"
+	rm -rf "$reviews_root" "$ledger_root" "$out_dir"
+	mkdir -p "${reviews_root}/repoA/branchA/reviews/1000" "${reviews_root}/repoA/branchA/reviews/2000"
+	mkdir -p "${reviews_root}/repoB/branchB/reviews/1000"
+	mkdir -p "$ledger_root"
+
+	# Real, current-time-relative epochs so find_ledger_for_branch's date math
+	# (which compares a ledger's own start time against the review session's)
+	# has a realistic ledger-started-before-session ordering to check.
+	local now_s now_ms ledger_ts round1_epoch round2_epoch
+	now_s=$(date -u +%s)
+	now_ms=$((now_s * 1000))
+	ledger_ts=$(date -u -j -f '%s' "$((now_s - 600))" +%Y%m%dT%H%M%SZ 2>/dev/null \
+		|| date -u -d "@$((now_s - 600))" +%Y%m%dT%H%M%SZ)
+	round1_epoch=$((now_ms - 500000))
+	round2_epoch=$((now_ms - 400000))
+
+	# Round 1: base=c0, head=c1, findings on a.txt at lines 5 and 50.
+	jq -n --arg base "$c0" --arg head "$c1" --arg branch "test-branch" --arg wd "$repo" \
+		'{baseBranch:"main", baseCommitId:$base, currentBranch:$branch, head:$head, workingDirectory:$wd, diff:[], timestamp:1000}' \
+		>"${reviews_root}/repoA/branchA/reviews/1000/git.json"
+	printf '{}' >"${reviews_root}/repoA/branchA/reviews/1000/internalState.json"
+	jq -n '{fileName:"a.txt", startLine:5, endLine:5, severity:"major", id:"f1", title:"restrict via policy prose"}' \
+		>"${reviews_root}/repoA/branchA/reviews/1000/11111111-1111-1111-1111-111111111111.json"
+	jq -n '{fileName:"a.txt", startLine:50, endLine:50, severity:"major", id:"f2"}' \
+		>"${reviews_root}/repoA/branchA/reviews/1000/22222222-2222-2222-2222-222222222222.json"
+
+	# Round 2: base=c1, head=c2. One finding planted on the SAME file+line as
+	# round 1's f1 (a re-flag); one on a new, unrelated line (not a re-flag).
+	jq -n --arg base "$c1" --arg head "$c2" --arg branch "test-branch" --arg wd "$repo" \
+		'{baseBranch:"main", baseCommitId:$base, currentBranch:$branch, head:$head, workingDirectory:$wd, diff:[], timestamp:2000}' \
+		>"${reviews_root}/repoA/branchA/reviews/2000/git.json"
+	printf '{}' >"${reviews_root}/repoA/branchA/reviews/2000/internalState.json"
+	jq -n '{fileName:"a.txt", startLine:5, endLine:5, severity:"major", id:"f3", title:"remove Bash entirely instead"}' \
+		>"${reviews_root}/repoA/branchA/reviews/2000/33333333-3333-3333-3333-333333333333.json"
+	jq -n '{fileName:"b.txt", startLine:99, endLine:99, severity:"major", id:"f4"}' \
+		>"${reviews_root}/repoA/branchA/reviews/2000/44444444-4444-4444-4444-444444444444.json"
+
+	# Skipped session: workingDirectory resolves, but head does not.
+	jq -n --arg base "$c0" --arg wd "$repo" \
+		'{baseBranch:"main", baseCommitId:$base, currentBranch:"branchB", head:"0000000000000000000000000000000000000000", workingDirectory:$wd, diff:[], timestamp:1000}' \
+		>"${reviews_root}/repoB/branchB/reviews/1000/git.json"
+	printf '{}' >"${reviews_root}/repoB/branchB/reviews/1000/internalState.json"
+
+	# Hand-written ledger (not via ledger_init, so ts can be backdated deterministically).
+	local ledger_file="${ledger_root}/test-branch-fixture.jsonl"
+	{
+		printf '{"event":"review_started","branch":"test-branch","base":"main","mode":"local","ts":"%s"}\n' "$ledger_ts"
+		printf '{"event":"round_start","round":1}\n'
+		printf '{"event":"decision","id":"f1","severity":4,"decision":"fix","rationale":"test","requires_verify":true}\n'
+		printf '{"event":"intent_verified","id":"f1"}\n'
+		printf '{"event":"decision","id":"f2","severity":4,"decision":"fix","rationale":"test","requires_verify":true}\n'
+		printf '{"event":"intent_verified","id":"f2"}\n'
+		printf '{"event":"round_start","round":2}\n'
+		printf '{"event":"decision","id":"f3","severity":4,"decision":"fix","rationale":"test","requires_verify":true}\n'
+		printf '{"event":"intent_verified","id":"f3"}\n'
+	} >"$ledger_file"
+
+	# Force the round dirs to carry the realistic epochs computed above (jq -n above used
+	# placeholder timestamps only for git.json's own informational field; the round dir
+	# *names* are what replay-corpus.sh actually sorts and matches against).
+	mv "${reviews_root}/repoA/branchA/reviews/1000" "${reviews_root}/repoA/branchA/reviews/${round1_epoch}"
+	mv "${reviews_root}/repoA/branchA/reviews/2000" "${reviews_root}/repoA/branchA/reviews/${round2_epoch}"
+	mv "${reviews_root}/repoB/branchB/reviews/1000" "${reviews_root}/repoB/branchB/reviews/${round1_epoch}"
+
+	local out
+	out=$(REPLAY_REVIEWS_ROOT="$reviews_root" REPLAY_LEDGER_ROOT="$ledger_root" REPLAY_OUT_DIR="$out_dir" \
+		bash "$replay" 2>&1) || {
+		printf '  FAIL S19: replay-corpus.sh exited non-zero: %s\n' "$out"
+		errors=$((errors + 1))
+	}
+
+	if [ -f "${out_dir}/replay-corpus.json" ]; then
+		local r1_reflags r2_reflags r2_findings
+		r1_reflags=$(jq -r '.[] | select(.session.branch_hash=="branchA") | .rounds[0].reflags' "${out_dir}/replay-corpus.json")
+		r2_reflags=$(jq -r '.[] | select(.session.branch_hash=="branchA") | .rounds[1].reflags' "${out_dir}/replay-corpus.json")
+		r2_findings=$(jq -r '.[] | select(.session.branch_hash=="branchA") | .rounds[1].findings' "${out_dir}/replay-corpus.json")
+
+		if [ "$r1_reflags" != "0" ]; then
+			printf '  FAIL S19.1: round 1 (no prior round) should report 0 reflags, got %s\n' "$r1_reflags"
+			errors=$((errors + 1))
+		fi
+		if [ "$r2_findings" != "2" ]; then
+			printf '  FAIL S19.2: round 2 should have 2 findings, got %s\n' "$r2_findings"
+			errors=$((errors + 1))
+		fi
+		if [ "$r2_reflags" != "1" ]; then
+			printf '  FAIL S19.3: round 2 should have exactly 1 reflag (the planted a.txt:5 repeat), got %s\n' "$r2_reflags"
+			errors=$((errors + 1))
+		fi
+
+		local skip_reason
+		skip_reason=$(jq -r '.[] | select(.session.branch_hash=="branchB") | .skip_reason' "${out_dir}/replay-corpus.json")
+		if [ -z "$skip_reason" ] || [ "$skip_reason" = "null" ]; then
+			printf '  FAIL S19.4: branchB (unresolvable HEAD) should be skipped with a reason, got none\n'
+			errors=$((errors + 1))
+		elif ! printf '%s' "$skip_reason" | grep -q "unresolvable HEAD"; then
+			printf '  FAIL S19.4: expected an unresolvable-HEAD skip reason, got: %s\n' "$skip_reason"
+			errors=$((errors + 1))
+		fi
+
+		# Contradiction candidates: reported separately (surfaced for human/model review),
+		# never folded into reflag_count or any other deterministic rate.
+		local cand_count cand_cur_title cand_prior_title
+		cand_count=$(jq -r '.[] | select(.session.branch_hash=="branchA") | .rounds[1].contradiction_candidates | length' "${out_dir}/replay-corpus.json")
+		if [ "$cand_count" != "1" ]; then
+			printf '  FAIL S19.5: round 2 should have exactly 1 contradiction candidate, got %s\n' "$cand_count"
+			errors=$((errors + 1))
+		fi
+		cand_cur_title=$(jq -r '.[] | select(.session.branch_hash=="branchA") | .rounds[1].contradiction_candidates[0].current.title' "${out_dir}/replay-corpus.json")
+		cand_prior_title=$(jq -r '.[] | select(.session.branch_hash=="branchA") | .rounds[1].contradiction_candidates[0].prior.title' "${out_dir}/replay-corpus.json")
+		if [ "$cand_cur_title" != "remove Bash entirely instead" ] || [ "$cand_prior_title" != "restrict via policy prose" ]; then
+			printf '  FAIL S19.6: contradiction candidate should pair current="remove Bash entirely instead" against prior="restrict via policy prose", got current=%s prior=%s\n' \
+				"$cand_cur_title" "$cand_prior_title"
+			errors=$((errors + 1))
+		fi
+		if ! grep -q 'Contradiction candidates' "${out_dir}/replay-corpus.md"; then
+			printf '  FAIL S19.7: replay-corpus.md should have a Contradiction candidates section\n'
+			errors=$((errors + 1))
+		fi
+	else
+		printf '  FAIL S19: %s was not written\n' "${out_dir}/replay-corpus.json"
+		errors=$((errors + 1))
+	fi
+
+	rm -rf "$repo" "$reviews_root" "$ledger_root" "$out_dir"
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S19: replay-corpus.sh (planted re-flag detected, round 1 baseline zero, unresolvable-HEAD skip reported)"
+	else
+		fail "S19: replay-corpus.sh (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# S20: mine-agent-costs.sh -- synthetic transcripts under an isolated projects
+# root (never touches real ~/.claude/projects). A duplicate tool_use id
+# appearing in two files (mirroring the real 2d458711/55e484ef fork this
+# session found) must be deduplicated, not double-counted. Two overlapping
+# dispatches whose descriptions name the same file must be flagged as a
+# same-file overlap.
+# ---------------------------------------------------------------------------
+s20() {
+	local miner="${LIB}/mine-agent-costs.sh"
+	local errors=0
+
+	local proj_root="${TMP}/s20-projects" out_dir="${TMP}/s20-out"
+	local proj_dir="${proj_root}/fake-project"
+	rm -rf "$proj_root" "$out_dir"
+	mkdir -p "$proj_dir"
+
+	# Base epoch chosen arbitrarily in the past; only relative ordering matters.
+	local base=1700000000
+	local ts_a ts_b ts_a_ack ts_b_ack ts_a_note ts_b_note
+	ts_a=$(date -u -r "$base" +"%Y-%m-%dT%H:%M:%S.000Z")
+	ts_a_ack=$(date -u -r "$((base + 1))" +"%Y-%m-%dT%H:%M:%S.000Z")
+	ts_b=$(date -u -r "$((base + 2))" +"%Y-%m-%dT%H:%M:%S.000Z") # dispatched before A's notification -> overlap
+	ts_b_ack=$(date -u -r "$((base + 3))" +"%Y-%m-%dT%H:%M:%S.000Z")
+	ts_a_note=$(date -u -r "$((base + 10))" +"%Y-%m-%dT%H:%M:%S.000Z")
+	ts_b_note=$(date -u -r "$((base + 8))" +"%Y-%m-%dT%H:%M:%S.000Z")
+
+	# session1.jsonl: call A and call B, both describing "same.sh" -- a planted same-file
+	# overlap (B is dispatched at base+2, before A's notification arrives at base+10).
+	{
+		printf '{"message":{"content":[{"type":"tool_use","id":"toolu_AAA","name":"Agent","input":{"subagent_type":"test:agent","description":"Fix same.sh part one"}}]},"uuid":"u1","timestamp":"%s"}\n' "$ts_a"
+		printf '{"message":{"content":[{"type":"tool_result","tool_use_id":"toolu_AAA","content":[{"type":"text","text":"Async agent launched successfully."}]}]},"timestamp":"%s"}\n' "$ts_a_ack"
+		printf '{"message":{"content":[{"type":"tool_use","id":"toolu_BBB","name":"Agent","input":{"subagent_type":"test:agent","description":"Fix same.sh part two"}}]},"uuid":"u2","timestamp":"%s"}\n' "$ts_b"
+		printf '{"message":{"content":[{"type":"tool_result","tool_use_id":"toolu_BBB","content":[{"type":"text","text":"Async agent launched successfully."}]}]},"timestamp":"%s"}\n' "$ts_b_ack"
+		printf '{"message":{"content":"<task-notification>\\n<tool-use-id>toolu_BBB</tool-use-id>\\n<status>completed</status>\\n<usage><subagent_tokens>800</subagent_tokens><tool_uses>1</tool_uses><duration_ms>4000</duration_ms></usage>\\n</task-notification>"},"timestamp":"%s"}\n' "$ts_b_note"
+		printf '{"message":{"content":"<task-notification>\\n<tool-use-id>toolu_AAA</tool-use-id>\\n<status>completed</status>\\n<usage><subagent_tokens>1000</subagent_tokens><tool_uses>2</tool_uses><duration_ms>5000</duration_ms></usage>\\n</task-notification>"},"timestamp":"%s"}\n' "$ts_a_note"
+	} >"${proj_dir}/session1.jsonl"
+
+	# session2.jsonl: a duplicate of call A's tool_use (same id), mirroring a forked/resumed
+	# session that shares a history prefix. Must not inflate the dedup'd call count.
+	printf '{"message":{"content":[{"type":"tool_use","id":"toolu_AAA","name":"Agent","input":{"subagent_type":"test:agent","description":"Fix same.sh part one"}}]},"uuid":"u1","timestamp":"%s"}\n' "$ts_a" \
+		>"${proj_dir}/session2.jsonl"
+
+	local out
+	out=$(MINE_PROJECTS_ROOT="$proj_root" MINE_OUT_DIR="$out_dir" bash "$miner" --project fake-project 2>&1) || {
+		printf '  FAIL S20: mine-agent-costs.sh exited non-zero: %s\n' "$out"
+		errors=$((errors + 1))
+	}
+
+	if [ -f "${out_dir}/agent-costs.json" ]; then
+		local total
+		total=$(jq 'length' "${out_dir}/agent-costs.json")
+		if [ "$total" != "2" ]; then
+			printf '  FAIL S20.1: expected 2 deduplicated calls (toolu_AAA appears in 2 files), got %s\n' "$total"
+			errors=$((errors + 1))
+		fi
+
+		# concurrency.json is a script-internal temp file, not a copied artifact; assert
+		# through the rendered markdown table instead.
+		local same
+		if ! grep -q "session1.jsonl" "${out_dir}/agent-costs.md"; then
+			printf '  FAIL S20.2: agent-costs.md should report concurrency for session1.jsonl\n'
+			errors=$((errors + 1))
+		fi
+		same=$(awk -F'|' '/session1\.jsonl/ {gsub(/ /,"",$5); print $5}' "${out_dir}/agent-costs.md")
+		if [ "$same" != "1" ]; then
+			printf '  FAIL S20.3: expected 1 same-file overlap for session1.jsonl (planted same.sh/same.sh pair), got %s\n' "${same:-<empty>}"
+			errors=$((errors + 1))
+		fi
+	else
+		printf '  FAIL S20: %s was not written\n' "${out_dir}/agent-costs.json"
+		errors=$((errors + 1))
+	fi
+
+	rm -rf "$proj_root" "$out_dir"
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S20: mine-agent-costs.sh (duplicate id deduplicated, same-file overlap flagged)"
+	else
+		fail "S20: mine-agent-costs.sh (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# S21: ledger.sh cost instrumentation -- every event carries a ts field (added
+# centrally in _ledger_event, not by touching each of the 13 emitting
+# functions), ledger_agent_spawn is additive alongside ledger_surgeon_dispatched
+# (never replaces it -- ledger_undispatched_fixes greps event=="dispatched"
+# specifically), and a pre-ts-schema ledger still parses without error.
+# ---------------------------------------------------------------------------
+s21() {
+	local errors=0
+	local ledger="${TMP}/s21.jsonl"
+	export LEDGER="$ledger"
+	# shellcheck source=lib/ledger.sh
+	source "${LIB}/ledger.sh"
+	LEDGER_DIR="$TMP"
+	: >"$ledger"
+
+	ledger_skip "CLI-1" 2 "nitpick"
+	ledger_decision "CLI-2" 4 "fix" "test" true
+	ledger_agent_spawn "CLI-2" "code-surgeon"
+	ledger_agent_spawn "CLI-3" "intent-verifier"
+	ledger_agent_spawn "CLI-4" "coderabbit-triage"
+
+	# 1. Every event carries a non-null ts.
+	local missing_ts
+	missing_ts=$(jq -r 'select(.ts == null)' "$ledger" | wc -l | tr -d ' ')
+	if [ "$missing_ts" -ne 0 ]; then
+		printf '  FAIL S21.1: %s event(s) missing a ts field\n' "$missing_ts"
+		errors=$((errors + 1))
+	fi
+
+	# 2. ts is monotonically non-decreasing across the file (append order).
+	local out_of_order
+	out_of_order=$(jq -rs '[.[].ts] as $ts | [range(0; ($ts|length)-1) | select($ts[.] > $ts[.+1])] | length' "$ledger")
+	if [ "$out_of_order" -ne 0 ]; then
+		printf '  FAIL S21.2: ts is not monotonically non-decreasing (%s inversions)\n' "$out_of_order"
+		errors=$((errors + 1))
+	fi
+
+	# 3. ledger_agent_spawn events are countable per id and per agent_type.
+	local spawn_count code_surgeon_count
+	spawn_count=$(jq -rs '[.[] | select(.event=="agent_spawn")] | length' "$ledger")
+	code_surgeon_count=$(jq -rs '[.[] | select(.event=="agent_spawn" and .agent_type=="code-surgeon")] | length' "$ledger")
+	if [ "$spawn_count" -ne 3 ]; then
+		printf '  FAIL S21.3: expected 3 agent_spawn events, got %s\n' "$spawn_count"
+		errors=$((errors + 1))
+	fi
+	if [ "$code_surgeon_count" -ne 1 ]; then
+		printf '  FAIL S21.3: expected 1 code-surgeon agent_spawn event, got %s\n' "$code_surgeon_count"
+		errors=$((errors + 1))
+	fi
+
+	# 4. ledger_agent_spawn is additive: it must not replace or rename the "dispatched" event
+	# that ledger_undispatched_fixes depends on for its reconciliation-sweep query.
+	ledger_surgeon_dispatched "CLI-2"
+	local undispatched
+	undispatched=$(ledger_undispatched_fixes)
+	if [ -n "$undispatched" ]; then
+		printf '  FAIL S21.4: CLI-2 should be dispatched (ledger_surgeon_dispatched still works), got undispatched: %s\n' "$undispatched"
+		errors=$((errors + 1))
+	fi
+
+	# 5. A pre-ts-schema ledger (events with no ts field at all, matching this corpus's real
+	# historical ledgers) must still parse without error via existing ledger functions.
+	local legacy="${TMP}/s21-legacy.jsonl"
+	{
+		printf '{"event":"review_started","branch":"x","base":"main","mode":"local"}\n'
+		printf '{"event":"decision","id":"CLI-1","severity":4,"decision":"fix","rationale":"r","requires_verify":true}\n'
+	} >"$legacy"
+	LEDGER="$legacy"
+	local legacy_undispatched
+	if ! legacy_undispatched=$(ledger_undispatched_fixes 2>&1); then
+		printf '  FAIL S21.5: ledger_undispatched_fixes should parse a pre-ts-schema ledger without error, got: %s\n' "$legacy_undispatched"
+		errors=$((errors + 1))
+	elif [ "$legacy_undispatched" != "CLI-1" ]; then
+		printf '  FAIL S21.5: expected CLI-1 undispatched in the legacy ledger, got: %s\n' "$legacy_undispatched"
+		errors=$((errors + 1))
+	fi
+	LEDGER="$ledger"
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S21: ledger.sh cost instrumentation (monotonic ts, additive agent_spawn, legacy-schema parse)"
+	else
+		fail "S21: ledger.sh cost instrumentation (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
 # Run all
 # ---------------------------------------------------------------------------
 printf '=== rabbit-sweep smoke tests ===\n'
@@ -1282,6 +1978,12 @@ s12
 s13
 s14
 s15
+s16
+s17
+s18
+s19
+s20
+s21
 
 printf '\nResults: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

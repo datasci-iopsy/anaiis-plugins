@@ -1,5 +1,5 @@
 {"type":"review_context","reviewType":"all","currentBranch":"test","baseBranch":"main","workingDirectory":"/tmp"}
 {"type":"status","phase":"analyzing","status":"reviewing"}
-{"type":"finding","severity":"trivial","fileName":"a.R","codegenInstructions":"Verify each finding against current code.\n\nIn @a.R at line 1, trivial issue.","suggestions":[]}
-{"type":"finding","severity":"info","fileName":"b.R","codegenInstructions":"Verify each finding against current code.\n\nIn @b.R at line 2, info note.","suggestions":[]}
+{"type":"finding","severity":"trivial","fileName":"a.R","startLine":10,"endLine":10,"codegenInstructions":"Verify each finding against current code.\n\nIn @a.R at line 1, trivial issue.","suggestions":[]}
+{"type":"finding","severity":"info","fileName":"b.R","startLine":22,"endLine":25,"codegenInstructions":"Verify each finding against current code.\n\nIn @b.R at line 2, info note.","suggestions":[]}
 {"type":"complete","status":"review_completed","findings":2}

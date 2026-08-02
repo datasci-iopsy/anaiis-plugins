@@ -56,19 +56,23 @@ fi
 # Normalize output to the shared finding schema.
 # Filters only type=="finding" lines; status/context/heartbeat/complete lines
 # are discarded.
-# Actual CLI schema: fileName, codegenInstructions, suggestions[], severity (label).
+# Actual CLI schema: fileName, startLine, endLine, codegenInstructions, suggestions[],
+# severity (label). startLine/endLine confirmed present on every finding across this
+# project's local review history.
 # Severity labels confirmed live: critical/major/minor. "nitpick" (this
 # script's original mapping) and "trivial"/"info" (docs.coderabbit.ai) are
 # both mapped defensively for the low end since we can't yet confirm which
 # spelling the installed CLI version emits without an expensive live review.
-# Output schema: {id, file, line, severity, title, body, suggested_fix, source}
+# Output schema: {id, file, line, line_start, line_end, severity, title, body, suggested_fix, source}
 jq -c 'select(.type == "finding")' "$RAW" \
 	| jq -sc 'to_entries[] | .value + {_idx: (.key + 1)}' \
 	| jq -c '
     {
         id: ("CLI-" + (._idx | tostring)),
         file: .fileName,
-        line: null,
+        line: .startLine,
+        line_start: .startLine,
+        line_end: .endLine,
         severity: (
             if   .severity == "critical" then 5
             elif .severity == "major"    then 4

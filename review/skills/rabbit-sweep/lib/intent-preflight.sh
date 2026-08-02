@@ -23,6 +23,17 @@ LINE_START="$2"
 LINE_END="$3"
 WINDOW=20
 
+# Reject non-numeric/empty/null line args explicitly, before they reach
+# arithmetic. Bash's set -u treats a non-numeric string like "abc" or "null"
+# as an unbound-variable reference inside $((...)), crashing loudly; but an
+# empty string evaluates silently to 0, which would pass preflight range
+# checks against the wrong line entirely instead of failing at all. Both
+# failure modes are worse than a clear, distinguishable rejection here.
+if ! [[ "$LINE_START" =~ ^[0-9]+$ ]] || ! [[ "$LINE_END" =~ ^[0-9]+$ ]]; then
+	printf 'preflight:bad-line-args\n' >&2
+	exit 1
+fi
+
 if [[ -n "${INTENT_PREFLIGHT_DIFF:-}" ]]; then
 	diff_content=$(cat "$INTENT_PREFLIGHT_DIFF")
 else
