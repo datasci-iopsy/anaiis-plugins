@@ -64,7 +64,7 @@ if [ "$branch_sha" != "$new_sha" ]; then
 	exit 52
 fi
 
-remote_sha=$(git ls-remote --exit-code --heads "$remote" "$branch" 2>/dev/null | cut -f1) || true
+remote_sha=$(git ls-remote --exit-code "$remote" "refs/heads/${branch}" 2>/dev/null | cut -f1) || true
 if [ -z "$remote_sha" ]; then
 	if ! git ls-remote --exit-code "$remote" >/dev/null 2>&1; then
 		refuse "could not query remote ${remote} (offline, auth failure, or misconfigured)"
