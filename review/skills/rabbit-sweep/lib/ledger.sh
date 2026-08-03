@@ -74,9 +74,30 @@ ledger_append() {
 	printf '%s\n' "$1" >>"$LEDGER"
 }
 
+# Adds a ts field to every event centrally, here, rather than touching each of the many
+# emitting functions' own jq filters individually. "$@" is a list of --arg/--argjson pairs
+# followed by exactly one trailing jq filter string; that filter is popped, wrapped as
+# "(<filter>) + {ts: $_ts}", and the rest of the arg list is passed through unchanged, so
+# every existing call site's own filter stays untouched.
 _ledger_event() {
 	_ledger_require || return 1
-	jq -nc "$@" >>"$LEDGER"
+	local ts
+	ts=$(date -u +%Y%m%dT%H%M%SZ)
+	local args=("$@")
+	local n=${#args[@]}
+	local filter="${args[$((n - 1))]}"
+	unset 'args[$((n - 1))]'
+	jq -nc "${args[@]}" --arg _ts "$ts" "(${filter}) + {ts: \$_ts}" >>"$LEDGER"
+}
+
+# Records that a code-surgeon/coderabbit-triage/intent-verifier Agent() call is about to be
+# made for this id, purely for cost accounting (mine-agent-costs.sh's ledger-side counterpart).
+# Additive alongside ledger_surgeon_dispatched, never a replacement for it:
+# ledger_undispatched_fixes greps specifically for event=="dispatched" for its reconciliation-
+# sweep query, and that must keep matching only what it always has.
+ledger_agent_spawn() {
+	local id="$1" agent_type="$2"
+	_ledger_event --arg id "$id" --arg agent_type "$agent_type" '{event:"agent_spawn", id:$id, agent_type:$agent_type}'
 }
 
 ledger_skip() {
@@ -91,14 +112,32 @@ ledger_skip() {
 # stated requirement is a caller bug (see ledger_intent_verified's guard),
 # not a case that should silently default to "no verification needed".
 ledger_decision() {
-	local id="$1" severity="$2" decision="$3" rationale="$4" requires_verify="${5:-}"
-	if [ "$decision" = "fix" ] && [ -z "$requires_verify" ]; then
-		printf 'ledger_decision: requires_verify (5th arg, true|false) is mandatory when decision="fix"\n' >&2
-		return 1
+	local id="$1" severity="$2" decision="$3" rationale="$4" requires_verify="${5:-}" fingerprint="${6:-}" file_hash="${7:-}"
+	if [ "$decision" = "fix" ]; then
+		case "$requires_verify" in
+			true | false) ;;
+			*)
+				printf 'ledger_decision: requires_verify (5th arg, true|false) is mandatory when decision="fix"\n' >&2
+				return 1
+				;;
+		esac
 	fi
 	requires_verify="${requires_verify:-false}"
-	_ledger_event --arg id "$id" --argjson sev "$severity" --arg dec "$decision" --arg rat "$rationale" --argjson rv "$requires_verify" \
-		'{event:"decision", id:$id, severity:$sev, decision:$dec, rationale:$rat, requires_verify:$rv}'
+	_ledger_event --arg id "$id" --argjson sev "$severity" --arg dec "$decision" \
+		--arg rat "$rationale" --argjson rv "$requires_verify" \
+		--arg fp "$fingerprint" --arg fh "$file_hash" \
+		'{event:"decision", id:$id, severity:$sev, decision:$dec, rationale:$rat, requires_verify:$rv}
+		 + (if $fp != "" then {fingerprint:$fp} else {} end)
+		 + (if $fh != "" then {file_hash:$fh} else {} end)'
+}
+
+# Records that a code-surgeon Agent() call is about to be made for this id.
+# Logged before the call, not after it returns, so a surgeon that crashes or
+# hangs still counts as dispatched and cannot be endlessly re-swept by
+# ledger_undispatched_fixes.
+ledger_surgeon_dispatched() {
+	local id="$1"
+	_ledger_event --arg id "$id" '{event:"dispatched", id:$id}'
 }
 
 ledger_verified() {
@@ -201,6 +240,51 @@ ledger_intent_failed() {
 	local id="$1" file="$2" reason="$3"
 	_ledger_event --arg id "$id" --arg file "$file" --arg reason "$reason" \
 		'{event:"intent_failed", id:$id, file:$file, reason:$reason}'
+}
+
+# Print all ids with a decision:"fix" event but no matching dispatched event.
+# Usage: ledger_undispatched_fixes
+# One id per line, empty output if none. Used by the Phase 4 reconciliation
+# sweep to catch a "decided fix" that never spawned a surgeon.
+ledger_undispatched_fixes() {
+	[ -f "$LEDGER" ] || return 0
+	comm -23 \
+		<(jq -r 'select(.event=="decision" and .decision=="fix") | .id' "$LEDGER" | sort -u) \
+		<(jq -r 'select(.event=="dispatched") | .id' "$LEDGER" | sort -u)
+}
+
+# Records how many undispatched fixes the end-of-round reconciliation sweep
+# found and re-dispatched, so the sweep itself is visible in the ledger as a
+# distinct, auditable occurrence.
+ledger_sweep_ran() {
+	local count="$1"
+	_ledger_event --argjson count "$count" '{event:"sweep_ran", count:$count}'
+}
+
+# Fingerprint: file + suggestion text, so a later round's re-ask of the same
+# substantive question can be matched even though its round-scoped id differs.
+ledger_fingerprint() {
+	local file="$1" suggestion="$2"
+	local hasher
+	if command -v sha1sum >/dev/null 2>&1; then
+		hasher=sha1sum
+	else
+		hasher=shasum
+	fi
+	printf '%s\x1e%s' "$file" "$suggestion" | "$hasher" | cut -d' ' -f1
+}
+
+# Usage: ledger_prior_verdict <fingerprint>
+# Prints the most recent decision event for this fingerprint (compact JSON), or
+# nothing if never seen. Callers check .decision=="skip" before short-circuiting
+# on it; a prior "fix" verdict is never reused this way (see phases.md Phase 4).
+# Callers also compare the returned .file_hash (when present) against the target
+# file's current content hash before reusing a skip verdict -- a mismatch means
+# the file changed since the prior decision (see phases.md Phase 4).
+ledger_prior_verdict() {
+	local fingerprint="$1"
+	[ -f "$LEDGER" ] || return 0
+	jq -c --arg fp "$fingerprint" 'select(.event=="decision" and .fingerprint==$fp)' "$LEDGER" | tail -1
 }
 
 # Print all IDs that already have a terminal event (intent_verified or skip) across all ledgers for this PR.

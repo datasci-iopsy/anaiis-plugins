@@ -189,7 +189,15 @@ s6() {
 		return
 	}
 
-	pass "S6: git-state.sh artifacts (commits.json records both rename paths, diffstat, diff.patch, run.json)"
+	local recorded_root actual_root
+	recorded_root=$(jq -r '.repo_root' "${run_dir}/run.json")
+	actual_root=$(git -C "$repo" rev-parse --show-toplevel)
+	if [ "$recorded_root" != "$actual_root" ]; then
+		fail "S6: run.json repo_root should be ${actual_root}, got ${recorded_root}"
+		return
+	fi
+
+	pass "S6: git-state.sh artifacts (commits.json records both rename paths, diffstat, diff.patch, run.json, repo_root)"
 }
 
 # ---------------------------------------------------------------------------
@@ -344,7 +352,19 @@ PLAN
 		return
 	fi
 
-	pass "S11: apply-plan.sh clean reconstruction (final-state-wins, deletion, 3 commits)"
+	if [ ! -f "${run_dir}/result.json" ]; then
+		fail "S11: apply-plan.sh should write result.json on success"
+		return
+	fi
+	local result_new_sha branch_sha
+	result_new_sha=$(jq -r '.new_sha' "${run_dir}/result.json")
+	branch_sha=$(git -C "$repo" rev-parse feat/full)
+	if [ "$result_new_sha" != "$branch_sha" ]; then
+		fail "S11: result.json new_sha (${result_new_sha}) should match feat/full's tip (${branch_sha})"
+		return
+	fi
+
+	pass "S11: apply-plan.sh clean reconstruction (final-state-wins, deletion, 3 commits, result.json)"
 }
 
 # ---------------------------------------------------------------------------
@@ -420,6 +440,20 @@ PLAN
 		return
 	fi
 	pass "S13: apply-plan.sh pre-commit hook failure (exit 32, hook output surfaced)"
+
+	# S13.2: same failing hook, but with explicit human-approved --no-verify opt-in.
+	# The failed attempt above left tmp/rebase-feat/hook checked out; switch back
+	# to the real branch before deleting it, same as abort-plan.sh will do.
+	git -C "$repo" switch -q --force feat/hook
+	git -C "$repo" branch -D "tmp/rebase-feat/hook" >/dev/null 2>&1 || true
+	local noverify_out
+	noverify_out=$(cd "$repo" && APPLY_PLAN_NO_VERIFY=1 bash "${LIB}/apply-plan.sh" "$run_dir" 2>&1)
+	local noverify_code=$?
+	if [ "$noverify_code" -ne 0 ]; then
+		fail "S13.2: apply-plan.sh with APPLY_PLAN_NO_VERIFY=1 expected exit 0 (hook skipped), got ${noverify_code}: ${noverify_out}"
+		return
+	fi
+	pass "S13.2: apply-plan.sh APPLY_PLAN_NO_VERIFY=1 skips a failing hook when explicitly opted in"
 }
 
 # ---------------------------------------------------------------------------
@@ -441,7 +475,10 @@ s14() {
 {"groups": [{"message": "feat: add x", "commits": ["${x_sha}"], "files": ["x.txt"]}], "flagged": [], "rationale": "smoke fixture"}
 PLAN
 
-	git -C "$repo" tag "safety/pre-rebase-feat/collide"
+	# Tag points at main's tip, not head_sha -- a real collision (some unrelated
+	# tag with this name), distinct from S14.3 below (a stale tag from this
+	# same run, which must not block a retry).
+	git -C "$repo" tag "safety/pre-rebase-feat/collide" main
 	(cd "$repo" && bash "${LIB}/apply-plan.sh" "$run_dir" >/dev/null 2>&1)
 	local tag_code=$?
 	if [ "$tag_code" -ne 30 ]; then
@@ -457,7 +494,23 @@ PLAN
 		fail "S14: apply-plan.sh tmp-branch collision expected exit 31, got ${tmp_code}"
 		return
 	fi
+	git -C "$repo" branch -D "tmp/rebase-feat/collide" >/dev/null
 	pass "S14: apply-plan.sh safety-tag and tmp-branch collision guards (exit 30, 31)"
+
+	# S14.3: a stale tag pointing at the SAME head_sha this run would tag anyway
+	# (e.g. left over from an aborted attempt) must not block a retry -- only a
+	# tag pointing elsewhere is a real collision.
+	local head_sha
+	head_sha=$(git -C "$repo" rev-parse feat/collide)
+	git -C "$repo" tag "safety/pre-rebase-feat/collide" "$head_sha"
+	local same_out
+	same_out=$(cd "$repo" && bash "${LIB}/apply-plan.sh" "$run_dir" 2>&1)
+	local same_code=$?
+	if [ "$same_code" -ne 0 ]; then
+		fail "S14.3: apply-plan.sh should proceed when the stale tag already points at head_sha, got exit ${same_code}: ${same_out}"
+		return
+	fi
+	pass "S14.3: apply-plan.sh proceeds when a stale safety tag already points at head_sha"
 }
 
 # ---------------------------------------------------------------------------
@@ -577,6 +630,496 @@ PLAN
 }
 
 # ---------------------------------------------------------------------------
+# S18: apply-plan.sh detects the base (main) has advanced since run.json was
+# captured, and aborts before any destructive action (exit 37, no safety tag,
+# no tmp branch) instead of silently reconstructing onto a stale fork point.
+# ---------------------------------------------------------------------------
+s18() {
+	local errors=0
+
+	# Case 1: base genuinely advances *after* capture -- must abort, exit 37.
+	local repo="${TMP}/s18a"
+	new_repo "$repo"
+	echo a >"${repo}/a.txt" && git -C "$repo" add a.txt && git -C "$repo" commit -q -m "chore: init"
+	git -C "$repo" checkout -q -b feat/base-moved
+	echo b >"${repo}/b.txt" && git -C "$repo" add b.txt && git -C "$repo" commit -q -m "feat: add b"
+	local feat_sha
+	feat_sha=$(git -C "$repo" rev-parse HEAD)
+
+	local state_out run_dir
+	state_out=$(cd "$repo" && bash "${LIB}/git-state.sh" feat/base-moved main)
+	run_dir=$(printf '%s' "$state_out" | jq -r '.run_dir')
+	cat >"${run_dir}/plan.json" <<PLAN
+{"groups": [{"message": "feat: add b", "commits": ["${feat_sha}"], "files": ["b.txt"]}], "flagged": [], "rationale": "single group"}
+PLAN
+
+	# Advance main after the snapshot was captured.
+	git -C "$repo" checkout -q main
+	echo unrelated >"${repo}/c.txt" && git -C "$repo" add c.txt && git -C "$repo" commit -q -m "chore: unrelated main work"
+	git -C "$repo" checkout -q feat/base-moved
+
+	(cd "$repo" && bash "${LIB}/apply-plan.sh" "$run_dir" >/dev/null 2>&1)
+	local code=$?
+	if [ "$code" -ne 37 ]; then
+		printf '  FAIL S18.1: expected exit 37 when base advances after capture, got %s\n' "$code"
+		errors=$((errors + 1))
+	fi
+	if git -C "$repo" rev-parse -q --verify "refs/tags/safety/pre-rebase-feat/base-moved" >/dev/null; then
+		printf '  FAIL S18.2: exit 37 must fire before the safety tag is created\n'
+		errors=$((errors + 1))
+	fi
+	if git -C "$repo" rev-parse -q --verify "refs/heads/tmp/rebase-feat/base-moved" >/dev/null; then
+		printf '  FAIL S18.3: exit 37 must fire before the tmp branch is created\n'
+		errors=$((errors + 1))
+	fi
+
+	# Case 2 (regression guard): a branch that is simply behind main *before*
+	# capture, with nothing changing afterward, must NOT be flagged as stale.
+	# An earlier version of this check compared to fork_sha instead of a
+	# captured base_sha snapshot and false-positived on this ordinary case.
+	local repo2="${TMP}/s18b"
+	new_repo "$repo2"
+	echo a >"${repo2}/a.txt" && git -C "$repo2" add a.txt && git -C "$repo2" commit -q -m "chore: init"
+	git -C "$repo2" checkout -q -b feat/behind-main
+	echo b >"${repo2}/b.txt" && git -C "$repo2" add b.txt && git -C "$repo2" commit -q -m "feat: add b"
+	local feat_sha2
+	feat_sha2=$(git -C "$repo2" rev-parse HEAD)
+	# main advances *before* git-state.sh ever runs -- ordinary, pre-existing drift.
+	git -C "$repo2" checkout -q main
+	echo unrelated >"${repo2}/c.txt" && git -C "$repo2" add c.txt && git -C "$repo2" commit -q -m "chore: pre-existing main work"
+	git -C "$repo2" checkout -q feat/behind-main
+
+	local state_out2 run_dir2
+	state_out2=$(cd "$repo2" && bash "${LIB}/git-state.sh" feat/behind-main main)
+	run_dir2=$(printf '%s' "$state_out2" | jq -r '.run_dir')
+	cat >"${run_dir2}/plan.json" <<PLAN
+{"groups": [{"message": "feat: add b", "commits": ["${feat_sha2}"], "files": ["b.txt"]}], "flagged": [], "rationale": "single group"}
+PLAN
+
+	local apply_out2
+	apply_out2=$(cd "$repo2" && bash "${LIB}/apply-plan.sh" "$run_dir2")
+	local code2=$?
+	if [ "$code2" -ne 0 ]; then
+		printf '  FAIL S18.4: expected exit 0 for an ordinary behind-main branch, got %s\n' "$code2"
+		errors=$((errors + 1))
+	elif [ "$(printf '%s' "$apply_out2" | jq -r '.ok')" != "true" ]; then
+		printf '  FAIL S18.4: expected ok:true for an ordinary behind-main branch\n'
+		errors=$((errors + 1))
+	fi
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S18: base-staleness check (exit 37 on real staleness, no false positive when merely behind main)"
+	else
+		fail "S18: base-staleness check (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# S19: find-reusable-plan.sh detects a byte-identical, same-branch, recent
+# (<1h) plan to reuse, and correctly excludes a differing diffstat and a
+# stale (>1h old) candidate. HOME is isolated to a temp dir since RUN_ROOT is
+# under $HOME/.claude/anaiis-git-ops/runs, matching rabbit-sweep's S15 technique.
+# ---------------------------------------------------------------------------
+s19() {
+	local errors=0
+	local fake_home="${TMP}/s19-home"
+	rm -rf "$fake_home"
+	mkdir -p "$fake_home"
+	local run_root="${fake_home}/.claude/anaiis-git-ops/runs"
+	mkdir -p "$run_root"
+
+	# A prior run for the same branch, recent, with a plan.json (reusable candidate).
+	local prior_dir="${run_root}/feat-x-20260801T100000Z-0"
+	mkdir -p "$prior_dir"
+	printf ' a.txt | 1 +\n' >"${prior_dir}/diffstat.txt"
+	printf '{"groups":[]}\n' >"${prior_dir}/plan.json"
+	printf '{"branch":"feat/x"}\n' >"${prior_dir}/run.json"
+
+	# The current run: identical diffstat.
+	local current_dir="${run_root}/feat-x-20260801T100500Z-0"
+	mkdir -p "$current_dir"
+	printf ' a.txt | 1 +\n' >"${current_dir}/diffstat.txt"
+	printf '{"branch":"feat/x"}\n' >"${current_dir}/run.json"
+
+	local match
+	match=$(HOME="$fake_home" bash "${LIB}/find-reusable-plan.sh" "$current_dir")
+	if [ "$match" != "$prior_dir" ]; then
+		printf '  FAIL S19.1: expected to match %s, got: %s\n' "$prior_dir" "$match"
+		errors=$((errors + 1))
+	fi
+
+	# A different current diffstat must not match.
+	local current_dir2="${run_root}/feat-x-20260801T101000Z-0"
+	mkdir -p "$current_dir2"
+	printf ' b.txt | 5 +\n' >"${current_dir2}/diffstat.txt"
+	printf '{"branch":"feat/x"}\n' >"${current_dir2}/run.json"
+
+	local match2
+	match2=$(HOME="$fake_home" bash "${LIB}/find-reusable-plan.sh" "$current_dir2")
+	if [ -n "$match2" ]; then
+		printf '  FAIL S19.2: expected no match for a differing diffstat, got: %s\n' "$match2"
+		errors=$((errors + 1))
+	fi
+
+	# A stale (>1h old) candidate with an otherwise identical diffstat must not match.
+	# Remove the recent match first so only the stale one could possibly match.
+	rm -rf "$prior_dir"
+	local stale_dir="${run_root}/feat-x-20260801T010000Z-0"
+	mkdir -p "$stale_dir"
+	printf ' a.txt | 1 +\n' >"${stale_dir}/diffstat.txt"
+	printf '{"groups":[]}\n' >"${stale_dir}/plan.json"
+	printf '{"branch":"feat/x"}\n' >"${stale_dir}/run.json"
+	touch -t "$(date -u -v-2H +%Y%m%d%H%M 2>/dev/null || date -u -d '2 hours ago' +%Y%m%d%H%M)" "$stale_dir"
+
+	local current_dir3="${run_root}/feat-x-20260801T110000Z-0"
+	mkdir -p "$current_dir3"
+	printf ' a.txt | 1 +\n' >"${current_dir3}/diffstat.txt"
+	printf '{"branch":"feat/x"}\n' >"${current_dir3}/run.json"
+
+	local match3
+	match3=$(HOME="$fake_home" bash "${LIB}/find-reusable-plan.sh" "$current_dir3")
+	if [ -n "$match3" ]; then
+		printf '  FAIL S19.3: expected no match for a stale (>1h) candidate, got: %s\n' "$match3"
+		errors=$((errors + 1))
+	fi
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S19: find-reusable-plan.sh (identical diffstat matches, differing diffstat and stale candidates do not)"
+	else
+		fail "S19: find-reusable-plan.sh (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# S20: abort-plan.sh. Only ever invoked after a human has explicitly chosen
+# "abort" following a Phase 4-5 failure -- never automatic on failure
+# detection. Covers: refusal when not on the tmp branch, successful abort
+# after an exit-32 hook failure (tag deleted since it's redundant -- same
+# sha as the untouched branch), residual untracked state reported rather
+# than hidden, and abort-then-retry actually succeeding (exit 0), proving
+# the exit-30 relaxation from the previous commit closes the loop.
+# ---------------------------------------------------------------------------
+s20() {
+	local errors=0
+	local repo="${TMP}/s20"
+	new_repo "$repo"
+	echo a >"${repo}/a.txt" && git -C "$repo" add a.txt && git -C "$repo" commit -q -m "chore: init"
+	git -C "$repo" checkout -q -b feat/abort
+	echo x >"${repo}/x.txt" && git -C "$repo" add x.txt && git -C "$repo" commit -q -m "feat: add x"
+	local x_sha
+	x_sha=$(git -C "$repo" rev-parse HEAD)
+
+	# Refusal: not on the tmp branch at all (e.g. called with a fresh/unrelated
+	# run_dir, or before any Phase 4-5 attempt ever ran).
+	local state_out run_dir
+	state_out=$(cd "$repo" && bash "${LIB}/git-state.sh" feat/abort main)
+	run_dir=$(printf '%s' "$state_out" | jq -r '.run_dir')
+	local refuse_code
+	(cd "$repo" && bash "${LIB}/abort-plan.sh" "$run_dir" >/dev/null 2>&1)
+	refuse_code=$?
+	if [ "$refuse_code" -eq 0 ]; then
+		printf '  FAIL S20.1: abort-plan.sh should refuse when HEAD is not on the tmp branch\n'
+		errors=$((errors + 1))
+	fi
+
+	# A hook that fails AND drops an untracked artifact (e.g. a lint cache file),
+	# so the residual-status assertion below is a real, not hypothetical, case.
+	mkdir -p "${repo}/.git/hooks"
+	printf '#!/usr/bin/env bash\necho "residue" > "%s/.lint-cache"\necho "simulated lint failure" >&2\nexit 1\n' "$repo" >"${repo}/.git/hooks/pre-commit"
+	chmod +x "${repo}/.git/hooks/pre-commit"
+
+	cat >"${run_dir}/plan.json" <<PLAN
+{"groups": [{"message": "feat: add x", "commits": ["${x_sha}"], "files": ["x.txt"]}], "flagged": [], "rationale": "smoke fixture"}
+PLAN
+	(cd "$repo" && bash "${LIB}/apply-plan.sh" "$run_dir" >/dev/null 2>&1)
+	local apply_code=$?
+	if [ "$apply_code" -ne 32 ]; then
+		printf '  FAIL S20.2: expected exit 32 to set up the abort scenario, got %s\n' "$apply_code"
+		errors=$((errors + 1))
+	fi
+
+	local abort_out
+	abort_out=$(cd "$repo" && bash "${LIB}/abort-plan.sh" "$run_dir")
+	local abort_code=$?
+	if [ "$abort_code" -ne 0 ]; then
+		printf '  FAIL S20.3: abort-plan.sh expected exit 0, got %s: %s\n' "$abort_code" "$abort_out"
+		errors=$((errors + 1))
+	fi
+
+	local head_ref
+	head_ref=$(git -C "$repo" symbolic-ref --quiet HEAD)
+	if [ "$head_ref" != "refs/heads/feat/abort" ]; then
+		printf '  FAIL S20.4: HEAD should be back on feat/abort, got %s\n' "$head_ref"
+		errors=$((errors + 1))
+	fi
+	if git -C "$repo" rev-parse -q --verify "refs/heads/tmp/rebase-feat/abort" >/dev/null; then
+		printf '  FAIL S20.5: tmp branch should be deleted after abort\n'
+		errors=$((errors + 1))
+	fi
+	local tag_deleted
+	tag_deleted=$(printf '%s' "$abort_out" | jq -r '.tag_deleted')
+	if [ "$tag_deleted" != "true" ]; then
+		printf '  FAIL S20.6: safety tag should be deleted (redundant -- branch sha unchanged), got tag_deleted=%s\n' "$tag_deleted"
+		errors=$((errors + 1))
+	fi
+	if git -C "$repo" rev-parse -q --verify "refs/tags/safety/pre-rebase-feat/abort" >/dev/null; then
+		printf '  FAIL S20.7: safety tag should actually be gone\n'
+		errors=$((errors + 1))
+	fi
+	local residual
+	residual=$(printf '%s' "$abort_out" | jq -r '.residual_status')
+	if ! printf '%s' "$residual" | grep -q '.lint-cache'; then
+		printf '  FAIL S20.8: residual_status should report the hook-dropped .lint-cache artifact, got: %s\n' "$residual"
+		errors=$((errors + 1))
+	fi
+	rm -f "${repo}/.lint-cache"
+
+	# Abort-then-retry (the "fix and retry" branch of the three-way choice --
+	# remove the offending hook, simulating the fix): the exit-30 relaxation
+	# must let this succeed now instead of hitting exit 30 again.
+	rm -f "${repo}/.git/hooks/pre-commit"
+	local retry_out retry_code
+	retry_out=$(cd "$repo" && bash "${LIB}/apply-plan.sh" "$run_dir" 2>&1)
+	retry_code=$?
+	if [ "$retry_code" -ne 0 ]; then
+		printf '  FAIL S20.9: retry after abort expected exit 0, got %s: %s\n' "$retry_code" "$retry_out"
+		errors=$((errors + 1))
+	fi
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S20: abort-plan.sh (refusal, successful abort, tag logic, residual reporting, abort-then-retry)"
+	else
+		fail "S20: abort-plan.sh (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# S21: apply-plan.sh exit 35 (compare-and-swap failure -- the branch moved
+# externally, out from under this run, between capture and swap). A
+# post-commit hook fires during the group-commit loop (which commits onto the
+# tmp branch) and force-moves the real branch to a different sha, simulating
+# something else changing it mid-run. Isolated under a fake HOME so run dirs
+# don't land in the real ~/.claude/anaiis-git-ops/runs.
+# ---------------------------------------------------------------------------
+s21() {
+	local errors=0
+	local fake_home="${TMP}/s21-home"
+	mkdir -p "$fake_home"
+	local repo="${TMP}/s21-repo"
+	new_repo "$repo"
+	echo a >"${repo}/a.txt" && git -C "$repo" add a.txt && git -C "$repo" commit -q -m "chore: init"
+	git -C "$repo" checkout -q -b feat/cas35
+	echo x >"${repo}/x.txt" && git -C "$repo" add x.txt && git -C "$repo" commit -q -m "feat: add x"
+	local x_sha
+	x_sha=$(git -C "$repo" rev-parse HEAD)
+	local main_sha
+	main_sha=$(git -C "$repo" rev-parse main)
+
+	mkdir -p "${repo}/.git/hooks"
+	printf '#!/usr/bin/env bash\ngit update-ref refs/heads/feat/cas35 %s\nexit 0\n' "$main_sha" >"${repo}/.git/hooks/post-commit"
+	chmod +x "${repo}/.git/hooks/post-commit"
+
+	local state_out run_dir
+	state_out=$(cd "$repo" && HOME="$fake_home" bash "${LIB}/git-state.sh" feat/cas35 main)
+	run_dir=$(printf '%s' "$state_out" | jq -r '.run_dir')
+	cat >"${run_dir}/plan.json" <<PLAN
+{"groups": [{"message": "feat: add x", "commits": ["${x_sha}"], "files": ["x.txt"]}], "flagged": [], "rationale": "smoke fixture"}
+PLAN
+
+	local err code
+	err=$(cd "$repo" && HOME="$fake_home" bash "${LIB}/apply-plan.sh" "$run_dir" 2>&1 1>/dev/null)
+	code=$?
+	if [ "$code" -ne 35 ]; then
+		printf '  FAIL S21.1: expected exit 35, got %s: %s\n' "$code" "$err"
+		errors=$((errors + 1))
+	fi
+	if ! printf '%s' "$err" | grep -q 'Recovery: git switch --force feat/cas35 && git branch -D tmp/rebase-feat/cas35'; then
+		printf '  FAIL S21.2: expected a Recovery line for exit 35, got: %s\n' "$err"
+		errors=$((errors + 1))
+	fi
+	if ! git -C "$repo" rev-parse -q --verify "refs/tags/safety/pre-rebase-feat/cas35" >/dev/null; then
+		printf '  FAIL S21.3: safety tag should be preserved after exit 35\n'
+		errors=$((errors + 1))
+	fi
+	if ! git -C "$repo" rev-parse -q --verify "refs/heads/tmp/rebase-feat/cas35" >/dev/null; then
+		printf '  FAIL S21.4: tmp branch should be preserved after exit 35\n'
+		errors=$((errors + 1))
+	fi
+	local moved_sha
+	moved_sha=$(git -C "$repo" rev-parse feat/cas35)
+	if [ "$moved_sha" != "$main_sha" ]; then
+		printf '  FAIL S21.5: feat/cas35 should still be at the externally-moved sha (%s), got %s\n' "$main_sha" "$moved_sha"
+		errors=$((errors + 1))
+	fi
+
+	# The naive fix for exit 35 ("git reset --hard safety/pre-rebase-<branch>")
+	# would destroy the very external change that caused the CAS failure --
+	# abort-plan.sh must instead leave the moved branch alone and preserve the
+	# tag, since branch sha != tag sha here (unlike the 32/33 case in S20).
+	local abort_out abort_code
+	abort_out=$(cd "$repo" && bash "${LIB}/abort-plan.sh" "$run_dir")
+	abort_code=$?
+	if [ "$abort_code" -ne 0 ]; then
+		printf '  FAIL S21.6: abort-plan.sh expected exit 0 at exit-35 state, got %s: %s\n' "$abort_code" "$abort_out"
+		errors=$((errors + 1))
+	fi
+	local tag_deleted
+	tag_deleted=$(printf '%s' "$abort_out" | jq -r '.tag_deleted')
+	if [ "$tag_deleted" != "false" ]; then
+		printf '  FAIL S21.7: safety tag must NOT be deleted at exit 35 (branch moved externally), got tag_deleted=%s\n' "$tag_deleted"
+		errors=$((errors + 1))
+	fi
+	if ! git -C "$repo" rev-parse -q --verify "refs/tags/safety/pre-rebase-feat/cas35" >/dev/null; then
+		printf '  FAIL S21.8: safety tag should still exist after abort at exit 35\n'
+		errors=$((errors + 1))
+	fi
+	local post_abort_sha
+	post_abort_sha=$(git -C "$repo" rev-parse feat/cas35)
+	if [ "$post_abort_sha" != "$main_sha" ]; then
+		printf '  FAIL S21.9: abort must not touch the externally-moved branch, expected %s, got %s\n' "$main_sha" "$post_abort_sha"
+		errors=$((errors + 1))
+	fi
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S21: apply-plan.sh exit 35 + abort-plan.sh (CAS failure, Recovery line, tag survives)"
+	else
+		fail "S21: apply-plan.sh exit 35 (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# S22: publish.sh -- decide-only, never executes a push. A local bare repo
+# stands in for "origin". Covers plain/lease mode decisions, the guard
+# refusals, the fresh-vs-stale sha fix (ls-remote, not the local
+# remote-tracking ref), and the grep invariant enforcing the hard limit.
+# ---------------------------------------------------------------------------
+s22() {
+	local errors=0
+	local origin="${TMP}/s22-origin.git"
+	local repo="${TMP}/s22-repo"
+	git init -q --bare "$origin"
+	new_repo "$repo"
+	git -C "$repo" remote add origin "$origin"
+	echo a >"${repo}/a.txt" && git -C "$repo" add a.txt && git -C "$repo" commit -q -m "chore: init"
+	git -C "$repo" push -q -u origin main
+
+	git -C "$repo" checkout -q -b feat/pub
+	echo x >"${repo}/x.txt" && git -C "$repo" add x.txt && git -C "$repo" commit -q -m "feat: add x"
+	local x_sha
+	x_sha=$(git -C "$repo" rev-parse HEAD)
+
+	local state_out run_dir
+	state_out=$(cd "$repo" && bash "${LIB}/git-state.sh" feat/pub main)
+	run_dir=$(printf '%s' "$state_out" | jq -r '.run_dir')
+	cat >"${run_dir}/plan.json" <<PLAN
+{"groups": [{"message": "feat: add x", "commits": ["${x_sha}"], "files": ["x.txt"]}], "flagged": [], "rationale": "smoke fixture"}
+PLAN
+	(cd "$repo" && bash "${LIB}/apply-plan.sh" "$run_dir" >/dev/null)
+
+	# Case A: no remote ref for feat/pub yet -> mode plain, -u in the command.
+	local out_a mode_a command_a
+	out_a=$(cd "$repo" && bash "${LIB}/publish.sh" "$run_dir")
+	mode_a=$(printf '%s' "$out_a" | jq -r '.mode')
+	command_a=$(printf '%s' "$out_a" | jq -r '.command')
+	if [ "$mode_a" != "plain" ]; then
+		printf '  FAIL S22.1: expected mode plain (no remote ref yet), got %s: %s\n' "$mode_a" "$out_a"
+		errors=$((errors + 1))
+	fi
+	if ! printf '%s' "$command_a" | grep -q -- '-u origin feat/pub'; then
+		printf '  FAIL S22.2: plain-mode command should set tracking (-u), got: %s\n' "$command_a"
+		errors=$((errors + 1))
+	fi
+
+	# Case B: push once (establishing the remote ref), no divergence -> lease
+	# mode with expect_sha matching the remote's actual current sha.
+	git -C "$repo" push -q -u origin feat/pub
+	local out_b mode_b expect_b remote_sha
+	out_b=$(cd "$repo" && bash "${LIB}/publish.sh" "$run_dir")
+	mode_b=$(printf '%s' "$out_b" | jq -r '.mode')
+	expect_b=$(printf '%s' "$out_b" | jq -r '.expect_sha')
+	remote_sha=$(git -C "$origin" rev-parse feat/pub)
+	if [ "$mode_b" != "lease" ] || [ "$expect_b" != "$remote_sha" ]; then
+		printf '  FAIL S22.3: expected mode lease with expect_sha=%s, got: %s\n' "$remote_sha" "$out_b"
+		errors=$((errors + 1))
+	fi
+
+	# Case C: the bare repo's ref advances directly (not via a local fetch),
+	# so the local remote-tracking ref is now stale. publish.sh must report
+	# the FRESH sha from ls-remote, not the stale local tracking ref -- this
+	# is the fix for the TOCTOU bug an implicit lease (or @{u}) would have.
+	local stale_tracking_sha
+	stale_tracking_sha=$(git -C "$repo" rev-parse refs/remotes/origin/feat/pub)
+	git -C "$origin" update-ref refs/heads/feat/pub refs/heads/main
+	local fresh_remote_sha
+	fresh_remote_sha=$(git -C "$origin" rev-parse feat/pub)
+	if [ "$fresh_remote_sha" = "$stale_tracking_sha" ]; then
+		printf '  FAIL S22.4: fixture bug -- fresh and stale shas should differ\n'
+		errors=$((errors + 1))
+	fi
+	local out_c expect_c
+	out_c=$(cd "$repo" && bash "${LIB}/publish.sh" "$run_dir")
+	expect_c=$(printf '%s' "$out_c" | jq -r '.expect_sha')
+	if [ "$expect_c" != "$fresh_remote_sha" ]; then
+		printf '  FAIL S22.5: expected the fresh remote sha (%s), got %s (stale local tracking ref was %s)\n' \
+			"$fresh_remote_sha" "$expect_c" "$stale_tracking_sha"
+		errors=$((errors + 1))
+	fi
+	# Revert the direct mutation so later cases in this fixture see a clean state.
+	git -C "$origin" update-ref refs/heads/feat/pub "$stale_tracking_sha"
+
+	# Case D: repo_root in run.json doesn't match the cwd's repo.
+	local other_repo="${TMP}/s22-other"
+	new_repo "$other_repo"
+	local out_d code_d
+	out_d=$(cd "$other_repo" && bash "${LIB}/publish.sh" "$run_dir" 2>&1)
+	code_d=$?
+	if [ "$code_d" -ne 50 ]; then
+		printf '  FAIL S22.6: expected exit 50 for repo_root mismatch, got %s: %s\n' "$code_d" "$out_d"
+		errors=$((errors + 1))
+	fi
+
+	# Case E: branch is main -- refuses.
+	local main_run="${TMP}/s22-main-run"
+	mkdir -p "$main_run"
+	jq '.branch = "main"' "${run_dir}/run.json" >"${main_run}/run.json"
+	local out_e code_e
+	out_e=$(cd "$repo" && bash "${LIB}/publish.sh" "$main_run" 2>&1)
+	code_e=$?
+	if [ "$code_e" -ne 51 ]; then
+		printf '  FAIL S22.7: expected exit 51 refusing main, got %s: %s\n' "$code_e" "$out_e"
+		errors=$((errors + 1))
+	fi
+
+	# Case F: branch tip no longer matches result.json's new_sha.
+	echo z >"${repo}/z.txt" && git -C "$repo" add z.txt && git -C "$repo" -c commit.gpgsign=false commit -q -m "feat: add z, not part of the verified run"
+	local out_f code_f
+	out_f=$(cd "$repo" && bash "${LIB}/publish.sh" "$run_dir" 2>&1)
+	code_f=$?
+	if [ "$code_f" -ne 52 ]; then
+		printf '  FAIL S22.8: expected exit 52 for new_sha mismatch, got %s: %s\n' "$code_f" "$out_f"
+		errors=$((errors + 1))
+	fi
+	git -C "$repo" reset -q --hard HEAD~1
+
+	# Grep invariant: no bare --force/-f as an actual flag, and no bare git-push
+	# invocation (only ever assigned into a command string, never executed).
+	if grep -v '^[[:space:]]*#' "${LIB}/publish.sh" | grep -qE -- '--force([^-]|$)'; then
+		printf '  FAIL S22.9: publish.sh must never construct a bare --force flag\n'
+		errors=$((errors + 1))
+	fi
+	if grep -qE '^[[:space:]]*git push' "${LIB}/publish.sh"; then
+		printf '  FAIL S22.10: publish.sh must never invoke git push itself\n'
+		errors=$((errors + 1))
+	fi
+
+	if [ "$errors" -eq 0 ]; then
+		pass "S22: publish.sh (plain/lease modes, fresh-vs-stale sha, guard refusals, no-bare-force invariant)"
+	else
+		fail "S22: publish.sh (${errors} checks failed)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
 # Run all
 # ---------------------------------------------------------------------------
 printf '=== anaiis-git-ops smoke tests ===\n'
@@ -597,6 +1140,11 @@ s14
 s15
 s16
 s17
+s18
+s19
+s20
+s21
+s22
 
 printf '\nResults: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

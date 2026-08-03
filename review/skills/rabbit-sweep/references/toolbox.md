@@ -21,7 +21,7 @@ authoritative phase procedures live in `phases.md` and `pr-mode.md`.
 - `Bash(bash lib/review-round.sh:*)` for running a review round with a deterministic timeout and one free retry (Phase 3 and Phase 7)
 - `Bash(uv:*)`, `Bash(Rscript:*)`, `Bash(bun:*)`, `Bash(npm:*)` for test verification
 - `Grep`, `Glob`, `Read` for codebase inspection during triage
-- `Agent(subagent_type="code-surgeon", description="Fix CR-<N>: <summary>")` for surgical fixes
+- `Agent(subagent_type="code-surgeon", description="Fix CR-<N>: <summary>")` for surgical fixes; batched to `"Fix CR-<N1>,<N2>,...: <file>"` when 2+ findings share a file
 - `Agent(subagent_type="coderabbit-triage", description="Triage CR-<N>: <summary>")` for severity-3 judgment calls
 - `Agent(subagent_type="intent-verifier", description="Verify intent CR-<N>: <summary>")` for post-fix intent verification (sev 4-5 and judgment-call sev-3)
 
@@ -37,7 +37,7 @@ Agent definitions live at:
 | 1 | Preflight | `lib/branch-guard.sh`, coderabbit auth check |
 | 2 | Scope resolution | Resolve base branch, confirm with user (skipped under `auto`/`all`) |
 | 3 | Review | Run `coderabbit review --agent` via `lib/run-review.sh`, parse normalized NDJSON |
-| 4 | Triage loop | Skip 1-2, coderabbit-triage for 3, surgeon for 3-5 |
+| 4 | Triage loop | Skip 1-2, coderabbit-triage for 3, surgeon for 3-5; surgeon dispatch is batched per file when 2+ findings land on the same file, one call per file otherwise |
 | 5 | Per-fix verification | Tests via `lib/detect-tests.sh`; then `lib/intent-preflight.sh` + intent-verifier for sev 4-5 and judgment sev-3; revert on any failure |
 | 6 | Commit | Group fixes, stage by name |
 | 7 | Review loop controller | Re-run up to 3 *counted* rounds; a timeout gets one free retry via `lib/review-round.sh` and does not consume a round; exit clean, stalled, at cap, or incomplete |
@@ -55,17 +55,23 @@ Agent definitions live at:
 
 ## Smoke test coverage
 
-`bash lib/smoke.sh` runs S1-S15: normalizer fixture, ledger idempotency and corrupt-file
+`bash lib/smoke.sh` runs S1-S21: normalizer fixture, ledger idempotency and corrupt-file
 tolerance, severity inference table, gh wiring check, agent contract drift and
-untrusted-input sentinels, intent-preflight fixture checks (S6), intent-verifier contract
-(S7), review-round.sh timeout+retry (S8), ledger_intent_verified sequencing guard (S9),
-run-review.sh error-event handling and severity mapping (S10), reply-skip.sh source guard
-and gh POST wiring (S11), fetch-thread-state.sh GraphQL flattening (S12), branch-guard.sh
+untrusted-input sentinels, intent-preflight fixture checks including bad-line-args rejection
+(S6), intent-verifier contract (S7), review-round.sh timeout+retry (S8),
+ledger_intent_verified sequencing guard (S9), run-review.sh error-event handling, severity
+mapping, and line_start/line_end emission (S10), reply-skip.sh source guard and gh POST
+wiring (S11), fetch-thread-state.sh GraphQL flattening (S12), branch-guard.sh
 main/master/detached-HEAD hard stops (S13), detect-tests.sh run-all/Makefile short-circuit
 and testthat detection with kept-green pytest/R/node checks (S14), ledger persistence
 across separate shell processes -- cross-process `ledger_resume`, the unset-`$LEDGER`
 `_ledger_require` guard, legacy-directory migration continuity, and the `no_tests` event
-(S15). Set `INTENT_JUDGMENT_SMOKE=1` for S7's manual verification scenario.
+(S15), dispatch reconciliation (S16), round-scoped ledger ids (S17), fingerprint
+short-circuit (S18), replay-corpus.sh re-flag/acceptance/contradiction-candidate reporting
+against a synthetic corpus (S19), mine-agent-costs.sh dedup and same-file overlap detection
+against synthetic transcripts (S20), and ledger.sh cost instrumentation -- monotonic `ts`,
+additive `ledger_agent_spawn`, legacy-schema parse (S21). Set `INTENT_JUDGMENT_SMOKE=1` for
+S7's manual verification scenario.
 
 Two headless E2E harnesses complement the smoke suite (on-demand only, never wired into
 pre-commit): `scripts/e2e-rabbit-sweep.sh` runs this skill end-to-end via `claude -p
@@ -80,6 +86,8 @@ proves the `pr` skill's mktemp template and SHA-verified push directly.
 - `lib/branch-guard.sh`: called during Phase 1 and Phase 1' to enforce the non-main branch requirement.
 - `lib/detect-tests.sh`: called during Phase 5 to identify the project test command; falls back to a loud `no_tests` ledger event and exit-summary counter when none is detected.
 - `lib/ledger.sh`: shared ledger helpers sourced by phases and lib scripts. `ledger_resume` re-resolves `$LEDGER` from a per-branch pointer file in a fresh shell process, since exported variables do not persist across separate Bash tool calls.
+- `lib/replay-corpus.sh`: standalone, on-demand analysis tool, not called from any phase. Reads `~/.coderabbit/reviews` and rabbit-sweep ledgers offline to report re-flag rate, acceptance rate, marginal yield, range escalation, and contradiction candidates per round -- the evidence for round-policy decisions, never invoked automatically.
+- `lib/mine-agent-costs.sh`: standalone, on-demand analysis tool, not called from any phase. Mines Claude Code session transcripts for `Agent()` dispatch cost and concurrency data -- the evidence for agent-topology decisions, never invoked automatically.
 - `lib/review-round.sh`: called during Phase 3 and Phase 7 to run a review round with a deterministic timeout and one free retry.
 - `lib/reply-skip.sh`: called from Phase 4's skip branches in PR mode to post a skip-explanation reply on the finding's GitHub thread.
 - `lib/fetch-thread-state.sh`: called during Phase 3' to drop findings whose review thread is already resolved or outdated on GitHub.

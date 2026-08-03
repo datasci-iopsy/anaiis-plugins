@@ -3,7 +3,7 @@ name: rabbit-sweep
 description: "CLI-driven CodeRabbit triage in two modes: (1) local pre-PR via coderabbit review --agent; (2) post-PR via gh api against bot comments. Triages by severity, fixes 3-5 with code-surgeon, verifies with two-stage check (tests + intent), commits, and pushes committed fixes with branch safety guards."
 user-invocable: true
 trigger: manual
-version: 0.3.0
+version: 0.4.0
 ---
 
 # rabbit-sweep: CLI-Driven CodeRabbit Triage
@@ -62,4 +62,4 @@ integrations live in `references/toolbox.md`; load it at Phase 1/1'.
 bash lib/smoke.sh
 ```
 
-S1-S15 must pass (coverage detail in `references/toolbox.md`).
+S1-S21 must pass (coverage detail in `references/toolbox.md`).
