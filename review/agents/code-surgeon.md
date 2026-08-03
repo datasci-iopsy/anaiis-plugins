@@ -69,6 +69,8 @@ Reporting:
 Bash usage (repair and verification only):
 - Bash may only be used to inspect the target file and its callers, run the project's test
   command, and run the repo's local validation command per the rules above.
-- Never use it to run a mutating git command (`add`, `commit`, `push`, `checkout`, `reset`,
-  `restore`, `clean`, `tag`) or any network command (`curl`, `wget`, `gh`, `npm install`/`publish`,
-  `pip install`, etc.).
+- Any other command is prohibited. If a command does not fall into one of the three uses
+  above, do not run it; report "Blocked: command outside the Bash contract" instead.
+- Prohibited examples (not exhaustive): mutating git commands (`add`, `commit`, `push`,
+  `checkout`, `reset`, `restore`, `clean`, `tag`), network commands (`curl`, `wget`, `gh`,
+  `npm install`/`publish`, `pip install`), and arbitrary interpreters (`python -c`, `node -e`).
