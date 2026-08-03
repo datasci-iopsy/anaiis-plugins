@@ -166,10 +166,11 @@ itself. Parse its JSON (`{mode, remote, branch, expect_sha, command, reason}`):
   directly as its own Bash call. If the call is denied or the push otherwise fails, fall
   back to the manual hand-off below -- do not retry with a different flag, and never
   escalate a plain push to a forced one.
-- **After a successful push**: re-verify by reading `git rev-parse <remote>/<branch>` and
-  comparing to the local branch sha -- a push can exit non-zero after the ref actually
-  moved, or print an ambiguous "Everything up-to-date." Report the verified sha, not just
-  the command's exit code.
+- **After a successful push**: re-verify by querying the remote itself --
+  `git ls-remote <remote> refs/heads/<branch>` -- and compare to the local branch sha. Do
+  not use `git rev-parse <remote>/<branch>`: that reads the local remote-tracking ref,
+  which a push that failed *after* moving the ref may have left stale, defeating the
+  purpose of the check. Report the verified sha, not just the command's exit code.
 
 Manual hand-off (used whenever `publish.sh` refuses, or the push above was denied/failed):
 
