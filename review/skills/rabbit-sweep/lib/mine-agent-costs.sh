@@ -41,7 +41,7 @@ trap 'rm -rf "$TMP_WORK"' EXIT
 # skill's own documented usage. Falls back to the current directory's own transcript
 # directory when no --project is given.
 if [ -n "$PROJECT_FILTER" ]; then
-	project_dirs=$(find "$PROJECTS_ROOT" -mindepth 1 -maxdepth 1 -type d -name "*${PROJECT_FILTER}*" 2>/dev/null)
+	project_dirs=$(find "$PROJECTS_ROOT" -mindepth 1 -maxdepth 1 -type d -name "*${PROJECT_FILTER}*" 2>/dev/null || true)
 else
 	default_dir="${PROJECTS_ROOT}/$(pwd | tr '/' '-')"
 	project_dirs=""
@@ -125,8 +125,8 @@ jq --slurpfile calls "${TMP_WORK}/calls-dedup.json" '
 		dur_ms_min: (map(.dur_ms|tonumber) | min),
 		dur_ms_median: (map(.dur_ms|tonumber) | sort | .[length/2|floor]),
 		dur_ms_max: (map(.dur_ms|tonumber) | max),
-		tool_uses_median: (map(.tool_uses|tonumber) | sort | .[length/2|floor]),
-		avg_tokens: ((map(.tokens|tonumber) | add) / length | floor)
+		tool_uses_median: (map(select(.tool_uses != null) | .tool_uses|tonumber) | if length > 0 then sort | .[length/2|floor] else null end),
+		avg_tokens: (map(select(.tokens != null) | .tokens|tonumber) | if length > 0 then (add / length | floor) else null end)
 	})
 ' "${TMP_WORK}/notifs-dedup.json" >"${TMP_WORK}/cost-table.json"
 
