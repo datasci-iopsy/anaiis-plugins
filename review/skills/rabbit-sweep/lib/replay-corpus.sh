@@ -57,8 +57,8 @@ ranges_overlap() {
 # one path per line, in no particular order -- callers sort per-session by epoch themselves.
 find_round_dirs() {
 	find "$REVIEWS_ROOT" -mindepth 4 -maxdepth 4 -type d 2>/dev/null | while read -r d; do
-		[ -f "${d}/git.json" ] && printf '%s\n' "$d"
-	done
+		if [ -f "${d}/git.json" ]; then printf '%s\n' "$d"; fi
+	done || true
 }
 
 # Finds the ledger file whose review_started event's branch matches $1 and whose own start
@@ -95,7 +95,7 @@ sessions_json="${TMP_WORK}/sessions.json"
 printf '[]\n' >"$sessions_json"
 
 # --- Discover sessions (unique repo/branch directories) --------------------
-session_dirs=$(find_round_dirs | while read -r d; do dirname "$(dirname "$d")"; done | sort -u)
+session_dirs=$(find_round_dirs | while read -r d; do dirname "$(dirname "$d")"; done | sort -u) || true
 
 if [ -z "$session_dirs" ]; then
 	printf '[]\n' >"${OUT_DIR}/replay-corpus.json"
@@ -115,8 +115,8 @@ while IFS= read -r session_dir; do
 
 	# Round dirs for this session only, sorted by epoch-ms (the dir's own basename).
 	round_dirs=$(find "${session_dir}/reviews" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
-		| while read -r d; do [ -f "${d}/git.json" ] && printf '%s\t%s\n' "$(basename "$d")" "$d"; done \
-		| sort -n | cut -f2-)
+		| while read -r d; do if [ -f "${d}/git.json" ]; then printf '%s\t%s\n' "$(basename "$d")" "$d"; fi; done \
+		| sort -n | cut -f2-) || true
 	[ -z "$round_dirs" ] && continue
 
 	first_round_dir=$(printf '%s\n' "$round_dirs" | head -1)
@@ -240,26 +240,34 @@ while IFS= read -r session_dir; do
 	total_lines=$(wc -l <"$ledger" | tr -d ' ')
 	nrounds=$(jq 'length' "$rounds_json")
 
-	for ((r = 1; r <= nrounds; r++)); do
-		start_line=$(printf '%s\n' "$round_start_lines" | sed -n "${r}p")
-		[ -z "$start_line" ] && start_line=1
-		next_r=$((r + 1))
-		end_line=$(printf '%s\n' "$round_start_lines" | sed -n "${next_r}p")
-		if [ -z "$end_line" ]; then
-			end_line="$total_lines"
-		else
-			end_line=$((end_line - 1))
-		fi
-		accepted=$(sed -n "${start_line},${end_line}p" "$ledger" \
-			| jq -rR 'fromjson? // empty' \
-			| jq -s '
-				([.[] | select(.event=="decision" and .decision=="fix") | .id] | unique) as $fixed
-				| ([.[] | select(.event=="intent_verified") | .id] | unique) as $verified
-				| [$fixed[] | select(. as $id | $verified | index($id))] | length
-			')
-		jq --argjson r "$r" --argjson acc "$accepted" \
-			'(.[$r-1].accepted) = $acc' "$rounds_json" >"${rounds_json}.tmp" && mv "${rounds_json}.tmp" "$rounds_json"
-	done
+	if [ -z "$round_start_lines" ]; then
+		# No round_start markers: per-round partitioning is not possible. Mark accepted
+		# as unknown instead of reusing the whole-ledger range for every round.
+		for ((r = 1; r <= nrounds; r++)); do
+			jq --argjson r "$r" '(.[$r-1].accepted) = null' "$rounds_json" >"${rounds_json}.tmp" && mv "${rounds_json}.tmp" "$rounds_json"
+		done
+	else
+		for ((r = 1; r <= nrounds; r++)); do
+			start_line=$(printf '%s\n' "$round_start_lines" | sed -n "${r}p")
+			[ -z "$start_line" ] && start_line=1
+			next_r=$((r + 1))
+			end_line=$(printf '%s\n' "$round_start_lines" | sed -n "${next_r}p")
+			if [ -z "$end_line" ]; then
+				end_line="$total_lines"
+			else
+				end_line=$((end_line - 1))
+			fi
+			accepted=$(sed -n "${start_line},${end_line}p" "$ledger" \
+				| jq -rR 'fromjson? // empty' \
+				| jq -s '
+					([.[] | select(.event=="decision" and .decision=="fix") | .id] | unique) as $fixed
+					| ([.[] | select(.event=="intent_verified") | .id] | unique) as $verified
+					| [$fixed[] | select(. as $id | $verified | index($id))] | length
+				')
+			jq --argjson r "$r" --argjson acc "$accepted" \
+				'(.[$r-1].accepted) = $acc' "$rounds_json" >"${rounds_json}.tmp" && mv "${rounds_json}.tmp" "$rounds_json"
+		done
+	fi
 
 	round1_accepted=$(jq '.[0].accepted // 0' "$rounds_json")
 	jq --argjson r1 "$round1_accepted" '
