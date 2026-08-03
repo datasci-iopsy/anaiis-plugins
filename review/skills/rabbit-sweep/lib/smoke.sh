@@ -1810,12 +1810,18 @@ s20() {
 	# Base epoch chosen arbitrarily in the past; only relative ordering matters.
 	local base=1700000000
 	local ts_a ts_b ts_a_ack ts_b_ack ts_a_note ts_b_note
-	ts_a=$(date -u -r "$base" +"%Y-%m-%dT%H:%M:%S.000Z")
-	ts_a_ack=$(date -u -r "$((base + 1))" +"%Y-%m-%dT%H:%M:%S.000Z")
-	ts_b=$(date -u -r "$((base + 2))" +"%Y-%m-%dT%H:%M:%S.000Z") # dispatched before A's notification -> overlap
-	ts_b_ack=$(date -u -r "$((base + 3))" +"%Y-%m-%dT%H:%M:%S.000Z")
-	ts_a_note=$(date -u -r "$((base + 10))" +"%Y-%m-%dT%H:%M:%S.000Z")
-	ts_b_note=$(date -u -r "$((base + 8))" +"%Y-%m-%dT%H:%M:%S.000Z")
+	ts_a=$(date -u -j -f '%s' "$base" +"%Y-%m-%dT%H:%M:%S.000Z" 2>/dev/null \
+		|| date -u -d "@$base" +"%Y-%m-%dT%H:%M:%S.000Z")
+	ts_a_ack=$(date -u -j -f '%s' "$((base + 1))" +"%Y-%m-%dT%H:%M:%S.000Z" 2>/dev/null \
+		|| date -u -d "@$((base + 1))" +"%Y-%m-%dT%H:%M:%S.000Z")
+	ts_b=$(date -u -j -f '%s' "$((base + 2))" +"%Y-%m-%dT%H:%M:%S.000Z" 2>/dev/null \
+		|| date -u -d "@$((base + 2))" +"%Y-%m-%dT%H:%M:%S.000Z") # dispatched before A's notification -> overlap
+	ts_b_ack=$(date -u -j -f '%s' "$((base + 3))" +"%Y-%m-%dT%H:%M:%S.000Z" 2>/dev/null \
+		|| date -u -d "@$((base + 3))" +"%Y-%m-%dT%H:%M:%S.000Z")
+	ts_a_note=$(date -u -j -f '%s' "$((base + 10))" +"%Y-%m-%dT%H:%M:%S.000Z" 2>/dev/null \
+		|| date -u -d "@$((base + 10))" +"%Y-%m-%dT%H:%M:%S.000Z")
+	ts_b_note=$(date -u -j -f '%s' "$((base + 8))" +"%Y-%m-%dT%H:%M:%S.000Z" 2>/dev/null \
+		|| date -u -d "@$((base + 8))" +"%Y-%m-%dT%H:%M:%S.000Z")
 
 	# session1.jsonl: call A and call B, both describing "same.sh" -- a planted same-file
 	# overlap (B is dispatched at base+2, before A's notification arrives at base+10).
