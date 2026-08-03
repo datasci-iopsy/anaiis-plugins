@@ -123,16 +123,12 @@ ledger_decision() {
 		esac
 	fi
 	requires_verify="${requires_verify:-false}"
-	if [ -n "$fingerprint" ] && [ -n "$file_hash" ]; then
-		_ledger_event --arg id "$id" --argjson sev "$severity" --arg dec "$decision" --arg rat "$rationale" --argjson rv "$requires_verify" --arg fp "$fingerprint" --arg fh "$file_hash" \
-			'{event:"decision", id:$id, severity:$sev, decision:$dec, rationale:$rat, requires_verify:$rv, fingerprint:$fp, file_hash:$fh}'
-	elif [ -n "$fingerprint" ]; then
-		_ledger_event --arg id "$id" --argjson sev "$severity" --arg dec "$decision" --arg rat "$rationale" --argjson rv "$requires_verify" --arg fp "$fingerprint" \
-			'{event:"decision", id:$id, severity:$sev, decision:$dec, rationale:$rat, requires_verify:$rv, fingerprint:$fp}'
-	else
-		_ledger_event --arg id "$id" --argjson sev "$severity" --arg dec "$decision" --arg rat "$rationale" --argjson rv "$requires_verify" \
-			'{event:"decision", id:$id, severity:$sev, decision:$dec, rationale:$rat, requires_verify:$rv}'
-	fi
+	_ledger_event --arg id "$id" --argjson sev "$severity" --arg dec "$decision" \
+		--arg rat "$rationale" --argjson rv "$requires_verify" \
+		--arg fp "$fingerprint" --arg fh "$file_hash" \
+		'{event:"decision", id:$id, severity:$sev, decision:$dec, rationale:$rat, requires_verify:$rv}
+		 + (if $fp != "" then {fingerprint:$fp} else {} end)
+		 + (if $fh != "" then {file_hash:$fh} else {} end)'
 }
 
 # Records that a code-surgeon Agent() call is about to be made for this id.
@@ -269,7 +265,13 @@ ledger_sweep_ran() {
 # substantive question can be matched even though its round-scoped id differs.
 ledger_fingerprint() {
 	local file="$1" suggestion="$2"
-	printf '%s\x1e%s' "$file" "$suggestion" | { command -v sha1sum >/dev/null 2>&1 && sha1sum || shasum; } | cut -d' ' -f1
+	local hasher
+	if command -v sha1sum >/dev/null 2>&1; then
+		hasher=sha1sum
+	else
+		hasher=shasum
+	fi
+	printf '%s\x1e%s' "$file" "$suggestion" | "$hasher" | cut -d' ' -f1
 }
 
 # Usage: ledger_prior_verdict <fingerprint>
