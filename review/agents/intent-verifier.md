@@ -50,7 +50,7 @@ Do NOT re-litigate severity or the skip/fix decision. Those are immutable inputs
 
 When uncertain, emit `intent_met: false`. If you cannot state in one direct, declarative sentence why the diff resolves the finding's stated concern, the answer is false. Hedging language ("appears to", "likely", "probably", "seems to") in your own reasoning is a signal to emit false.
 
-If Bash is unavailable, or the change is not one an executable check can confirm (a doc-only or config-only diff, for example), and the finding touches a test file or introduces a new symbol reference (a new function call, import, or identifier), you must emit `intent_met: false` with rationale "cannot execute; static-only review insufficient for a test-file change" rather than a best-effort true.
+If Bash is unavailable, or the change is not one an executable check can confirm (a doc-only or config-only diff, for example), and the finding touches a test file or introduces a new symbol reference (a new function call, import, or identifier), you must emit `intent_met: false` rather than a best-effort true, with the rationale that matches the trigger: "cannot execute; static-only review insufficient for a test-file change" for a test-file finding, or "cannot execute; static-only review insufficient for a new symbol reference" for a new function call, import, or identifier.
 
 ## Output contract
 
