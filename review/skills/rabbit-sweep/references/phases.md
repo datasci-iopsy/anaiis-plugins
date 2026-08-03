@@ -241,10 +241,20 @@ ledger_agent_spawn "<id>" "code-surgeon"
 
 Then snapshot any pre-existing uncommitted diff on the file, once per group (a multi-finding
 group's surgeon edits the file once, covering every finding in it), so a later
-revert-on-failure (Phase 5) restores only the surgeon's change, not the user's prior edits:
+revert-on-failure (Phase 5) restores only the surgeon's change, not the user's prior edits.
+
+Write the snapshot to disk, not to a shell variable: exported variables do not survive
+between Bash tool calls (see "Ledger persistence across phases" above), and concurrent file
+groups would otherwise overwrite one another's snapshot.
 ```bash
-PRE_SURGEON_DIFF=$(git diff -- "<file>")
+SNAP_DIR=~/.claude/rabbit-sweep/runs/pre-surgeon
+mkdir -p "$SNAP_DIR"
+SNAP="${SNAP_DIR}/$(printf '%s' "<file>" | tr '/' '_').diff"
+git diff -- "<file>" >"$SNAP"
 ```
+
+Phase 5 reapplies from `"$SNAP"` (recomputed from `<file>` the same way) rather than from a
+variable, and removes the snapshot once the finding is committed or finally reverted.
 
 Spawn the Agent with:
 - `subagent_type`: `code-surgeon`
@@ -274,8 +284,9 @@ Once a finding's surgeon call (single- or multi-finding) has completed, verify t
 finding in that group using the steps below, against the group's one shared diff. If any step
 fails for any finding in the group (tests, preflight, or intent-verifier), do not attempt to
 isolate just that finding's portion of the diff -- there is no reliable sub-file granularity to
-revert. Instead: revert the whole file (`git restore <file>`, then reapply `$PRE_SURGEON_DIFF`
-if non-empty), log the failure against the finding that triggered it, print that the batch is
+revert. Instead: revert the whole file (`git restore <file>`, then recompute `$SNAP` from
+`<file>` per Phase 4's pattern and reapply it if non-empty), log the failure against the
+finding that triggered it, print that the batch is
 being unwound, then re-dispatch every finding in that group individually (Phase 4's
 single-finding path, one surgeon call per finding) and verify each one from scratch. Findings
 that had already passed within the failed batch are re-verified, not assumed passing, since the
@@ -298,7 +309,7 @@ fi
 ```
 
 This script prints the test command(s) for the project, one per line, or `none` if no test suite is detected. Run each command. If any command exits non-zero:
-- Revert the fix, restoring only the surgeon's change: `git restore <file>`, then if `$PRE_SURGEON_DIFF` is non-empty, reapply it (`printf '%s' "$PRE_SURGEON_DIFF" | git apply`) so pre-existing uncommitted edits to the same file survive.
+- Revert the fix, restoring only the surgeon's change: `git restore <file>`, then recompute `$SNAP` from `<file>` (Phase 4's pattern) and, if it is non-empty, reapply it (`cat "$SNAP" | git apply`) so pre-existing uncommitted edits to the same file survive, then remove it (`rm -f "$SNAP"`) -- this finding is finally reverted, the snapshot has no further use.
 - Log:
   ```bash
   source lib/ledger.sh && ledger_resume
@@ -322,7 +333,10 @@ if ! preflight_reason=$(INTENT_PREFLIGHT_SUGGESTED_FIX="<finding.suggested_fix>"
     bash lib/intent-preflight.sh "<finding.file>" <finding.line_start> <finding.line_end> 2>&1); then
     ledger_intent_failed "<id>" "<finding.file>" "$preflight_reason"
     git restore "<finding.file>"
-    [ -n "$PRE_SURGEON_DIFF" ] && printf '%s' "$PRE_SURGEON_DIFF" | git apply
+    SNAP_DIR=~/.claude/rabbit-sweep/runs/pre-surgeon
+    SNAP="${SNAP_DIR}/$(printf '%s' "<finding.file>" | tr '/' '_').diff"
+    [ -s "$SNAP" ] && cat "$SNAP" | git apply
+    rm -f "$SNAP"
     # Print: REVERTED [<id>] <title> -- preflight failed: <preflight_reason>
     # Continue to next finding.
 fi
@@ -334,8 +348,8 @@ fi
 
 Pick exactly one branch:
 
-- **(a) Surgeon returned `Already resolved:`**: skip the preflight block above entirely for this outcome. If the surgeon nonetheless left an uncommitted change on the file, revert it the same scoped way (`git restore <file>`, then reapply `$PRE_SURGEON_DIFF` if non-empty). Log (`source lib/ledger.sh && ledger_resume` first if not already run this call) `ledger_already_resolved "<id>"`, then go to the final step.
-- **(b) Surgeon returned `Blocked:`**: revert any uncommitted change the surgeon left on the file the same scoped way (`git restore <file>`, then reapply `$PRE_SURGEON_DIFF` if non-empty), then stop here. No `verified`, `already_resolved`, or `intent_verified` event. Do not proceed further for this finding.
+- **(a) Surgeon returned `Already resolved:`**: skip the preflight block above entirely for this outcome. If the surgeon nonetheless left an uncommitted change on the file, revert it the same scoped way (`git restore <file>`, then recompute `$SNAP` from `<file>` per Phase 4's pattern and reapply it if non-empty). Log (`source lib/ledger.sh && ledger_resume` first if not already run this call) `ledger_already_resolved "<id>"`, then go to the final step.
+- **(b) Surgeon returned `Blocked:`**: revert any uncommitted change the surgeon left on the file the same scoped way (`git restore <file>`, then recompute `$SNAP` from `<file>` per Phase 4's pattern and reapply it if non-empty, then `rm -f "$SNAP"` -- this finding is finally reverted), then stop here. No `verified`, `already_resolved`, or `intent_verified` event. Do not proceed further for this finding.
 - **(c) This finding's `decision` event has `requires_verify: false`** (a mechanical sev-3 fix that never spawned `coderabbit-triage`): nothing further required. Go to the final step.
 - **(d) This finding's `decision` event has `requires_verify: true`** (sev 4-5, or sev 3 decided by `coderabbit-triage`): spawn the verifier now -- see "Verifier spawn" below -- before doing anything else.
 
@@ -357,7 +371,7 @@ source lib/ledger.sh && ledger_resume
 ledger_verifier_result "<id>" <intent_met> "<rationale>"
 ```
 
-- If `intent_met: false`: log `ledger_intent_failed "<id>" "<file>" "<rationale>"` (same call as above, or `source lib/ledger.sh && ledger_resume` first if this is a new Bash call), revert only the surgeon's change (`git restore "<file>"`, then reapply `$PRE_SURGEON_DIFF` if non-empty via `printf '%s' "$PRE_SURGEON_DIFF" | git apply`), print `REVERTED [<id>] <title> -- intent failed: <rationale>`, and continue to the next finding. Do not proceed to the final step.
+- If `intent_met: false`: log `ledger_intent_failed "<id>" "<file>" "<rationale>"` (same call as above, or `source lib/ledger.sh && ledger_resume` first if this is a new Bash call), revert only the surgeon's change (`git restore "<file>"`, then recompute `$SNAP` from `<file>` per Phase 4's pattern and reapply it if non-empty via `cat "$SNAP" | git apply`, then `rm -f "$SNAP"`), print `REVERTED [<id>] <title> -- intent failed: <rationale>`, and continue to the next finding. Do not proceed to the final step.
 - If `intent_met: true`: proceed to the final step.
 
 **Final step (reached from branch (a), (c), or a passing verifier in (d) only):**
@@ -365,7 +379,14 @@ ledger_verifier_result "<id>" <intent_met> "<rationale>"
 ```bash
 source lib/ledger.sh && ledger_resume
 ledger_intent_verified "<id>"
+SNAP_DIR=~/.claude/rabbit-sweep/runs/pre-surgeon
+rm -f "${SNAP_DIR}/$(printf '%s' "<finding.file>" | tr '/' '_').diff"
 ```
+
+`$SNAP` is not assumed to still be set here -- this may be a separate Bash call from wherever
+it was last computed, the same cross-call variable-persistence hazard the snapshot mechanism
+itself exists to work around. Recompute the path from `<finding.file>` rather than trusting
+the variable, same as every other termination point above.
 
 This call is guarded: it refuses (non-zero exit, no event written, stderr message) if `requires_verify: true` for this id and neither an `already_resolved` event nor a passing `verifier_result` (`intent_met: true`) exists yet in `$LEDGER`. A refusal means a branch above was skipped -- stop and re-check the sequence; do not retry the call as-is or assume the finding is verified.
 
@@ -390,10 +411,13 @@ Note: formatters (ruff, shfmt, sqlfmt) fire automatically via the PostToolUse ho
 **Dispatch reconciliation sweep (once per round, after all findings are triaged, before Phase 6):**
 
 Check for any `fix` decision that never got a surgeon dispatched -- this can happen if a
-decision was logged but the subsequent `Agent()` call was skipped or lost:
+decision was logged but the subsequent `Agent()` call was skipped or lost. `ledger_undispatched_fixes`
+queries the whole ledger, not just this round, so restrict to this round's ids -- otherwise an
+earlier round's still-undispatched id resurfaces here even though its ndjson is no longer
+`$REVIEW_OUT`:
 ```bash
 source lib/ledger.sh && ledger_resume
-undispatched=$(ledger_undispatched_fixes)
+undispatched=$(ledger_undispatched_fixes | grep "^R${ROUND}-" || true)
 ```
 If `$undispatched` is empty, log the sweep for audit before continuing to Phase 6:
 ```bash
@@ -405,14 +429,17 @@ Continue to Phase 6.
 If non-empty, dispatch each undispatched id now through the normal path. `ledger_decision`
 only stores `id`/`severity`/`decision`/`rationale`, not the full finding payload, so first
 resolve the finding's `file`, `line`, `title`, `body`, and `suggested_fix` by looking it up in
-this round's `$REVIEW_OUT` (local mode only; this lookup is valid because this sweep runs once
-per round right after that round's triage loop, so the ndjson that produced this id is still
-the current `$REVIEW_OUT`):
+this round's `$REVIEW_OUT` (local mode only), skipping with a warning if the id is not found
+there:
 ```bash
 finding=$(jq --arg id "$id" 'select(.id==$id)' "$REVIEW_OUT")
+if [ -z "$finding" ]; then
+    printf 'WARNING [%s]: undispatched fix not present in this round'"'"'s findings -- not swept\n' "$id"
+    continue
+fi
 ```
 Then repeat "Surgeon dispatch" above for that single finding, using the single-finding path
-(log the dispatch, snapshot `PRE_SURGEON_DIFF` for `finding.file`, construct the surgeon prompt
+(log the dispatch, write the disk snapshot to `$SNAP` for `finding.file`, construct the surgeon prompt
 from `finding`'s title, body, suggested_fix, file, and line exactly as the normal single-finding
 case does, spawn `code-surgeon`) -- never batch a swept finding with another, since each is
 being dispatched independently after the round's normal grouping already ran. Then run Phase
