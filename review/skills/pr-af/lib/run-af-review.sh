@@ -17,6 +17,7 @@
 #   0  success -- archived (or skipped because already archived and no --force)
 #   1  usage error / malformed stdin JSON
 #   2  praf:submit-failed        -- async POST did not return an execution id
+#   2  praf:run-locked           -- another invocation holds this run's lock directory
 #   3  praf:engine-failed        -- execution completed with a failure status
 #   4  praf:poll-deadline-exceeded -- execution.json preserved for a later resume
 #   5  praf:engine-timeout       -- engine itself reported status=timeout (its own
@@ -89,6 +90,13 @@ fi
 RUN_DIR="${RUNS_DIR}/${RUN_KEY}"
 mkdir -p "$RUN_DIR"
 
+LOCK_DIR="${RUN_DIR}/.lock"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+	printf 'praf:run-locked -- another invocation holds %s; wait for it or remove the directory if that run is known dead\n' "$LOCK_DIR" >&2
+	exit 2
+fi
+trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+
 # Self-contained guard, independent of the stdin-supplied ARCHIVE_EXISTS above: a
 # standalone invocation (see usage()) builds its own stdin JSON and can pass an
 # inaccurate archive_exists field, bypassing that check entirely. Derive the same
@@ -113,7 +121,7 @@ extract_status() {
 submit() {
 	local body response exec_id tmp
 	body=$(jq -n --arg pr_url "$PR_URL" '{input: {pr_url: $pr_url}}')
-	response=$("$CURL" -sS -X POST "${BASE_URL}/api/v1/execute/async/pr-af.review" \
+	response=$("$CURL" -sS --connect-timeout 10 --max-time 60 -X POST "${BASE_URL}/api/v1/execute/async/pr-af.review" \
 		-H 'Content-Type: application/json' -d "$body") || {
 		printf 'praf:submit-failed -- POST to %s/api/v1/execute/async/pr-af.review failed\n' "$BASE_URL" >&2
 		exit 2
@@ -155,7 +163,7 @@ DEADLINE=$((SUBMITTED_AT_EPOCH + MAX_DURATION_SECONDS + POLL_SLACK_SECONDS))
 
 POLL_BODY_FILE="${RUN_DIR}/response.json.tmp"
 while :; do
-	if "$CURL" -sS "${BASE_URL}/api/v1/executions/${EXECUTION_ID}" >"$POLL_BODY_FILE"; then
+	if "$CURL" -sS --connect-timeout 10 --max-time 60 "${BASE_URL}/api/v1/executions/${EXECUTION_ID}" >"$POLL_BODY_FILE"; then
 		if [ -s "$POLL_BODY_FILE" ]; then
 			RAW_RESPONSE=$(cat "$POLL_BODY_FILE")
 			STATUS=$(extract_status "$RAW_RESPONSE")

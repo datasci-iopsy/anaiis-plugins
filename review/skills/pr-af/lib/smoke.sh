@@ -102,6 +102,22 @@ b1() {
 		errors=$((errors + 1))
 	fi
 
+	# B1.3: .lock dir pre-held for the run key, no --force -> exit 2, praf:run-locked, no curl call
+	local lock_runs_dir="${TMP}/b1.3-runs"
+	calls_log="${TMP}/b1.3.calls"
+	: >"$calls_log"
+	local lock_input='{"pr":1,"url":"https://github.com/o/r/pull/1","head_sha":"abc123","run_key":"o-r-pr1-locked-model","archive_exists":false}'
+	mkdir -p "${lock_runs_dir}/o-r-pr1-locked-model/.lock"
+	set +e
+	echo "$lock_input" | CALLS_LOG="$calls_log" PRAF_CURL="$fake_curl" PRAF_RUNS_DIR="$lock_runs_dir" \
+		bash "$script" >/dev/null 2>"${TMP}/b1.3.err"
+	code=$?
+	set -e
+	if [ "$code" -ne 2 ] || [ -s "$calls_log" ] || ! grep -q "praf:run-locked" "${TMP}/b1.3.err"; then
+		echo "  FAIL B1.3: expected exit 2, no curl calls, praf:run-locked note; got exit ${code}, calls: $(cat "$calls_log"), stderr: $(cat "${TMP}/b1.3.err")"
+		errors=$((errors + 1))
+	fi
+
 	if [ "$errors" -eq 0 ]; then
 		pass "B1: run-af-review.sh idempotency (skip vs. --force)"
 	else

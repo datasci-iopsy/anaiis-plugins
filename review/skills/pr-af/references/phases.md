@@ -55,6 +55,7 @@ timeout-and-retry (rabbit-sweep's pattern for its synchronous `coderabbit` CLI) 
 risk paying for the same review twice. Instead the run directory itself is the only
 state:
 
+- A per-run lock directory (`<run_dir>/.lock`) serializes concurrent invocations sharing the same `run_key`; failure to acquire it exits `praf:run-locked` (2) without touching state.
 - `archive_exists: true` and no `--force`: skip entirely, exit 0. No network calls.
 - `execution.json` present, `response.json` absent, no `--force`: RESUME, poll the
   existing `execution_id` from disk; never submit a new job. Works across sessions,
