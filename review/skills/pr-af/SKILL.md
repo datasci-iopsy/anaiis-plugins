@@ -16,7 +16,7 @@ fixing findings is a manual follow-up (a fix-loop is a later version).
 
 ## Arguments
 
-```
+```text
 $ARGUMENTS: --pr <number|url> [--dry-run] [--force]
 ```
 
@@ -33,7 +33,7 @@ Load `references/phases.md` when a phase begins; do not pre-load.
 | 0 | `lib/preflight.sh`: af/plane/node/PR/CR checks, run-key | any check fails (exit 2-7; see Exit code contract) |
 | 1 | `lib/run-af-review.sh`: async submit or resume, verbatim archive | submit/engine failure or poll deadline exceeded (exit 2-5; see Exit code contract) |
 | 2 | `lib/fetch-cr-threads.sh` + `lib/xref.sh`: CR threads, deterministic overlap | never |
-| 3 | Reason per thread; `lib/reply-cr.sh` posts guarded replies | reply guard refuses (exit 10), or usage/no-evidence (exit 1), or an ambiguous post failure (exit 2; see Exit code contract) |
+| 3 | Reason per thread; `lib/reply-cr.sh` posts guarded replies | usage error (exit 1) or an ambiguous post failure (exit 2; see Exit code contract); exit 10 skips only the current thread, continue with the next |
 | 4 | Terminal report + `summary.json` | never |
 
 ## Exit code contract
