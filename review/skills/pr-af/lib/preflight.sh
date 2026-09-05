@@ -82,14 +82,16 @@ fi
 # AgentField 0.1.137 instance with a registered pr-af node:
 #   {reasoners:[{node,reasoner,tags,last_run_at,status}], shown, total}
 # The jq matcher below (via the .reasoners/.node path) correctly identifies the node
-# against that real schema; the other shapes stay as a defensive fallback.
+# against that real schema; the other shapes stay as a defensive fallback. The node
+# must also report a live status, a stopped node must not pass this check.
 NODE_FOUND=$(
 	jq -r '
         [(.data // .reasoners // .) // []]
         | flatten
         | map(select(
-            ((.node? // .name? // "") | tostring) == "pr-af"
-            or ((.node? // .name? // "") | tostring | startswith("pr-af"))
+            (((.node? // .name? // "") | tostring) == "pr-af"
+            or ((.node? // .name? // "") | tostring | startswith("pr-af")))
+            and ((.status? // "") == "live")
         ))
         | length > 0
     ' <<<"$AF_LS_OUT" 2>/dev/null || echo false

@@ -188,7 +188,8 @@ b4() {
 	fi
 
 	# Fake af dispatcher: FAKE_AF_DOWN=1 -> plane unreachable;
-	# FAKE_AF_NODE_FOUND=0 -> plane up but no pr-af reasoner.
+	# FAKE_AF_NODE_FOUND=0 -> plane up but no pr-af reasoner;
+	# FAKE_AF_NODE_STOPPED=1 -> plane up with a pr-af reasoner that is not live.
 	local fake_af="${TMP}/fake-af"
 	cat >"$fake_af" <<'EOF'
 #!/usr/bin/env bash
@@ -197,7 +198,9 @@ if [ "$1" = "ls" ]; then
 		echo 'Error: Get "http://localhost:8080/api/v1/reasoners": dial tcp [::1]:8080: connect: connection refused' >&2
 		exit 3
 	fi
-	if [ "${FAKE_AF_NODE_FOUND:-1}" = "1" ]; then
+	if [ "${FAKE_AF_NODE_STOPPED:-0}" = "1" ]; then
+		echo '{"reasoners":[{"node":"pr-af","reasoner":"review_dimension","tags":["review","pr"],"last_run_at":"2026-01-01T00:00:00Z","status":"stopped"}],"shown":1,"total":1}'
+	elif [ "${FAKE_AF_NODE_FOUND:-1}" = "1" ]; then
 		echo '{"reasoners":[{"node":"pr-af","reasoner":"review_dimension","tags":["review","pr"],"last_run_at":"2026-01-01T00:00:00Z","status":"live"}],"shown":1,"total":1}'
 	else
 		echo '{"reasoners":[{"node":"other","reasoner":"other_dimension","tags":["other"],"last_run_at":"2026-01-01T00:00:00Z","status":"live"}],"shown":1,"total":1}'
@@ -367,6 +370,16 @@ EOF
 	archive_exists=$(jq -r '.archive_exists' <<<"$out" 2>/dev/null || echo "PARSE_ERROR")
 	if [ "$code" -ne 0 ] || [ "$archive_exists" != "true" ]; then
 		echo "  FAIL B4.11: expected archive_exists=true; got ${archive_exists} (exit ${code})"
+		errors=$((errors + 1))
+	fi
+
+	# B4.12: pr-af node present but stopped -> exit 4 (same as node missing)
+	set +e
+	FAKE_AF_NODE_STOPPED=1 PRAF_AF_BIN="$fake_af" PRAF_GH="$fake_gh" bash "$script" --pr 1 >/dev/null 2>"${TMP}/b4.12.err"
+	code=$?
+	set -e
+	if [ "$code" -ne 4 ] || ! grep -q "praf:node-missing" "${TMP}/b4.12.err"; then
+		echo "  FAIL B4.12: expected exit 4 + praf:node-missing, got exit ${code}: $(cat "${TMP}/b4.12.err")"
 		errors=$((errors + 1))
 	fi
 
