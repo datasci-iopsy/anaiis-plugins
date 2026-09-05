@@ -41,10 +41,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Agent-Field/pr-af
-          # Placeholder only: replace with a specific, reviewed full commit SHA of
-          # Agent-Field/pr-af (not a branch or tag). Update this SHA only after
-          # explicitly reviewing the new revision; never point it at a moving ref.
-          ref: <PINNED_COMMIT_SHA>
+          # Pinned to a reviewed full commit SHA (Agent-Field/pr-af main HEAD,
+          # reviewed 2026-09-05). Update only after explicitly reviewing the new
+          # revision; never point it at a moving ref.
+          ref: 48ae7eeb4f07779004db6354728d49ca7b36dbc3
           path: pr-af
 
       - name: Start AgentField & PR-AF
@@ -53,8 +53,9 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          docker compose up -d
-          sleep 15 # Wait for services to be healthy
+          # --wait blocks until services with healthchecks report healthy (Compose v2.20+);
+          # the compose file's services must define healthchecks.
+          docker compose up -d --wait
 
       - name: Execute Deep Architectural Audit
         working-directory: ./pr-af
