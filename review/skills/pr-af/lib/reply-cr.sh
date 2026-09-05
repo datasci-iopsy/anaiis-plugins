@@ -131,11 +131,14 @@ fi
 # --- Guard 5: every reply must cite its evidence -- a real file:line, not a
 # bare "word:number" (version:2, 12:30, host:8080, and the bare word
 # "evidence:" itself all satisfied the old regex without citing anything
-# real); requires a path ending in a recognized extension immediately before
-# the ":line" (Finding 2). Intentional no-op, not a usage error, so this
-# exits 10 like the other deliberate-skip guards (Finding 3) ---
+# real); validates against THREAD_PATH from THREAD_JSON so any repository
+# file path is accepted, not a fixed extension list (Finding 4). Intentional
+# no-op, not a usage error, so this exits 10 like the other deliberate-skip
+# guards (Finding 3) ---
 BODY_CONTENT=$(cat "$BODY_FILE")
-if ! printf '%s' "$BODY_CONTENT" | grep -qiE '[A-Za-z0-9_./-]+\.(py|js|ts|go|rs|java|sh|md|json|ya?ml):[0-9]+'; then
+THREAD_PATH=$(jq -r '.path // empty' <<<"$THREAD_JSON")
+ESCAPED_PATH=$(printf '%s' "$THREAD_PATH" | sed 's/[]^$.*+?(){}|[]/\\&/g')
+if [ -z "$THREAD_PATH" ] || ! [[ "$BODY_CONTENT" =~ ${ESCAPED_PATH}:[0-9]+ ]]; then
 	printf 'reply-cr:no-evidence-citation\n' >&2
 	exit 10
 fi
@@ -191,21 +194,23 @@ fi
 # --- Guard 8: refuse a retry after an ambiguous prior attempt -- a POST that
 # times out or errors AFTER GitHub already created the reply is indistinguishable
 # from a genuine failure (reply-cr:post-failed below); a marker recording "a POST
-# was attempted for this thread+login" is written just BEFORE the POST and never
+# was attempted for this thread+login" is created just BEFORE the POST and never
 # cleared automatically, mirroring run-af-review.sh's execution.json (written
 # before the risky call so a later invocation can't blindly resubmit). Colocated
-# next to thread_state_file so no new state-directory configuration is needed. ---
+# next to thread_state_file so no new state-directory configuration is needed.
+# The marker itself is a directory, created via `mkdir` so the check-and-create
+# is a single atomic operation -- two concurrent invocations can't both observe
+# no marker and both proceed to POST. ---
 MARKER_DIR="$(dirname "$THREAD_STATE_FILE")/.reply-attempts"
 if ! mkdir -p "$MARKER_DIR" 2>/dev/null; then
 	printf 'reply-cr:marker-dir-unwritable -- cannot create %s\n' "$MARKER_DIR" >&2
 	exit 2
 fi
 MARKER_FILE="${MARKER_DIR}/${REPO//\//_}__${PR_NUM}__${THREAD_ID}__${ACTING_LOGIN}"
-if [ -f "$MARKER_FILE" ]; then
+if ! mkdir "$MARKER_FILE" 2>/dev/null; then
 	printf 'reply-cr:prior-attempt-ambiguous -- a previous POST for this thread/login did not confirm success or failure (marker: %s); verify on GitHub before retrying\n' "$MARKER_FILE" >&2
 	exit 2
 fi
-: >"$MARKER_FILE"
 
 # --- Post ---
 if ! "$GH" api "repos/${REPO}/pulls/${PR_NUM}/comments/${THREAD_ID}/replies" \

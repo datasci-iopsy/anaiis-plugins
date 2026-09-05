@@ -782,9 +782,11 @@ b8() {
 EOF
 
 	local body_with_evidence="${TMP}/b8-body-evidence.txt"
-	printf 'Confirmed: SQL injection at src/api/users.py:42, matches pr-af evidence.\n' >"$body_with_evidence"
+	printf 'Confirmed: SQL injection at a.py:10, matches pr-af evidence.\n' >"$body_with_evidence"
 	local body_no_evidence="${TMP}/b8-body-no-evidence.txt"
 	printf 'This looks fine to me.\n' >"$body_no_evidence"
+	local body_wrong_path_evidence="${TMP}/b8-body-wrong-path-evidence.txt"
+	printf 'Confirmed: SQL injection at src/api/users.py:42, matches pr-af evidence.\n' >"$body_wrong_path_evidence"
 
 	# B8.1: already-replied refusal (acting_login in reply_logins) -> exit 10, no gh call
 	local calls_log="${TMP}/b8.1.calls"
@@ -892,7 +894,7 @@ EOF
 		|| [ -z "$graphql_line" ] || [ -z "$post_line" ] || [ "$graphql_line" -ge "$post_line" ] \
 		|| ! grep -q 'repos/acme/widgets/pulls/1/comments/1/replies' "$calls_log" \
 		|| ! grep -q 'POST' "$calls_log" \
-		|| ! grep -qF 'src/api/users.py:42' "$calls_log"; then
+		|| ! grep -qF 'a.py:10' "$calls_log"; then
 		echo "  FAIL B8.7: expected exactly one graphql recheck call followed by one POST to the reply endpoint with the evidence body; got exit ${code}, call_count=${call_count}, graphql_line=${graphql_line}, post_line=${post_line}, calls:"
 		cat "$calls_log" 2>/dev/null | sed 's/^/    /'
 		errors=$((errors + 1))
@@ -975,6 +977,22 @@ EOF
 		|| grep -q '^api repos/.*replies' "$calls_log"; then
 		echo "  FAIL B8.11: expected exit 10 + reply-cr:thread-resolved from the live recheck overriding a stale not-resolved snapshot, no POST issued; got exit ${code}, stderr: $(cat "${TMP}/b8.11.err" 2>/dev/null), calls:"
 		cat "$calls_log" 2>/dev/null | sed 's/^/    /'
+		errors=$((errors + 1))
+	fi
+
+	# B8.12: wrong-path-evidence refusal -- body cites a real-looking file:line
+	# that is not the thread's own path ("src/api/users.py:42" for thread 1,
+	# whose path is "a.py") -> exit 10, no gh call, mirroring B8.5
+	calls_log="${TMP}/b8.12.calls"
+	: >"$calls_log"
+	set +e
+	CALLS_LOG="$calls_log" PRAF_GH="$fake_gh" \
+		bash "$script" acme/widgets 1 1 "$body_wrong_path_evidence" "$threads" "me" \
+		>/dev/null 2>"${TMP}/b8.12.err"
+	code=$?
+	set -e
+	if [ "$code" -ne 10 ] || [ -s "$calls_log" ]; then
+		echo "  FAIL B8.12: expected exit 10 and no gh call for evidence citing a path other than the thread's own; got exit ${code}"
 		errors=$((errors + 1))
 	fi
 
