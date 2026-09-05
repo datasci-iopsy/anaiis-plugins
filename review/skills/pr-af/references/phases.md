@@ -106,7 +106,7 @@ thread_id`) becomes `cr_summary`, falling back to the first entry in the group.
 
 Prints one JSON object:
 
-```
+```text
 {matched: [{thread_id, cr_summary, matched_praf_findings}],
  cr_unmatched: [{thread_id, cr_summary}],
  praf_unmatched: [...pr-af findings with no matching inline thread...],
@@ -135,26 +135,34 @@ to post into); they surface only in the Phase 4 report. Every decision is made B
 calling `lib/reply-cr.sh` -- the script itself only enforces structure, it does not
 reason.
 
+Each entry in Phase 2's `pr_summary_and_review_body` array also gets a verdict (confirm
+/ dispute / no-reply) from the model, same as a `matched` entry. That verdict is recorded
+in Phase 4's `summary.json` only, never posted via `lib/reply-cr.sh` -- there is no
+thread to reply into for a `pr-summary`/`review-body` source.
+
 `lib/reply-cr.sh <repo> <pr> <thread_root_comment_id> <body_file> <thread_state_file>
 <acting_login> [--dry-run]` enforces, in order, before any `gh` reference:
 
-1. thread exists in the Phase 2 fetch (else usage error)
+1. thread exists in the Phase 2 fetch (else `reply-cr:thread-not-found`, exit 1)
 2. `source == "inline"` only (`pr-summary`/`review-body` are a structural no-op --
-   `praf:non-inline-source`, exit 10)
-3. thread not already `is_resolved` (`praf:thread-resolved`, exit 10)
-4. `acting_login` not already in that thread's `reply_logins` -- the one-reply-per-thread
-   cap, derived entirely from live GitHub thread state, no local ledger of past replies
-   (`praf:already-replied`, exit 10)
-5. body contains an evidence citation (`evidence:` or a `file:line` pattern) --
-   `praf:no-evidence-citation`, exit 1, otherwise
+   `reply-cr:non-inline-source`, exit 10)
+3. thread not already `is_resolved` per the Phase-2 snapshot (`reply-cr:thread-resolved`,
+   exit 10)
+4. `acting_login` not already in that thread's `reply_logins`, and not the bot's own
+   login -- the one-reply-per-thread cap, derived entirely from live GitHub thread state
+   (`reply-cr:already-replied`, exit 10)
+5. body contains a real `file:line` evidence citation (a path with a recognized
+   extension immediately before `:line`, not a bare `word:number`) --
+   `reply-cr:no-evidence-citation`, exit 10, otherwise
 6. `--dry-run`: print the body, zero `gh` calls, exit 0 -- required before any live run
    in a repo (Success Criteria)
-7. no unresolved attempt marker for this thread+login (`praf:prior-attempt-ambiguous`,
-   exit 2) -- Guard 4 alone only sees the Phase-2 snapshot, so a retry after an ambiguous
-   POST failure (below) would otherwise pass it again and repost; a marker file, written
-   just before the POST and never cleared automatically, catches that case even though
-   it wasn't visible in the snapshot
-8. POST to `repos/<repo>/pulls/<pr>/comments/<id>/replies`; `praf:reply-post-failed`
+7. live resolution recheck: re-fetches this one thread's `is_resolved` state via GraphQL
+   immediately before the POST -- `reply-cr:resolution-recheck-failed`, exit 2, if the
+   recheck itself fails; `reply-cr:thread-resolved`, exit 10, if now resolved
+8. no unresolved attempt marker for this thread+login, created atomically via `mkdir`
+   (`reply-cr:prior-attempt-ambiguous`, exit 2) -- guards a retry on the same stale
+   Phase-2 snapshot after an ambiguous POST failure below
+9. POST to `repos/<repo>/pulls/<pr>/comments/<id>/replies`; `reply-cr:post-failed`
    (exit 2) on failure -- ambiguous (the POST may have partially succeeded), so verify
    on GitHub before any retry rather than re-running with the same thread_state_file
 
@@ -178,9 +186,12 @@ script needed for this alone):
 - Cost and latency from `meta.json` / `timing.json`; the archive path itself.
 
 `summary.json` (single write, re-derivable, sits beside `response.json` in the run
-directory) records, per Phase-2 thread id: the verdict taken (`confirm` / `dispute` /
-`no-reply` plus the no-reply reason) and, when a reply was posted, its comment id.
-No code edits, no commits, no pushes anywhere in this phase -- v1 is report-only.
+directory) records the verdict taken (`confirm` / `dispute` / `no-reply` plus the
+no-reply reason) and, when a reply was posted, its comment id, for every finding: keyed
+by `thread_id` for `matched` (inline) entries, and by `"<source>:<comment_id>"` (for
+example `review-body:5072217731`) for `pr_summary_and_review_body` entries, so every
+finding has exactly one record. No code edits, no commits, no pushes anywhere in this
+phase -- v1 is report-only.
 
 ## Smoke coverage (B1-B8)
 
