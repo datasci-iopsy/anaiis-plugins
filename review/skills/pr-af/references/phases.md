@@ -189,10 +189,14 @@ script needed for this alone):
 `summary.json` (single write, re-derivable, sits beside `response.json` in the run
 directory) records the verdict taken (`confirm` / `dispute` / `no-reply` plus the
 no-reply reason) and, when a reply was posted, its comment id, for every finding: keyed
-by `thread_id` for `matched` (inline) entries, and by `"<source>:<comment_id>"` (for
-example `review-body:5072217731`) for `pr_summary_and_review_body` entries, so every
-finding has exactly one record. No code edits, no commits, no pushes anywhere in this
-phase -- v1 is report-only.
+by `"<thread_id>:<finding_idx>"` for each (thread, finding) pair in `matched`
+(`finding_idx` is a pr-af finding's zero-based position in `response.json`'s `findings`
+array, immutable once archived, the same index `xref.sh` joins on), by
+`"praf:<finding_idx>"` for `praf_unmatched`, by `"cr:<thread_id>"` for `cr_unmatched` (a
+no-reply record with no pr-af finding), and by `"<source>:<comment_id>"` (for example
+`review-body:5072217731`) for `pr_summary_and_review_body` entries, so every pr-af
+finding and every CR thread has at least one record and no two records share a key. No
+code edits, no commits, no pushes anywhere in this phase -- v1 is report-only.
 
 ## Smoke coverage (B1-B8)
 
