@@ -53,9 +53,17 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # --wait blocks until services with healthchecks report healthy (Compose v2.20+);
-          # the compose file's services must define healthchecks.
+          # --wait gates on pr-af's healthcheck (Compose v2.20+); the agentfield
+          # service defines none, so probe its API directly below.
           docker compose up -d --wait
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8080/api/v1/reasoners >/dev/null && break
+            sleep 2
+          done
+          curl -fsS http://localhost:8080/api/v1/reasoners >/dev/null || {
+            echo "AgentField API did not become ready" >&2
+            exit 1
+          }
 
       - name: Execute Deep Architectural Audit
         working-directory: ./pr-af
